@@ -549,6 +549,37 @@ AUTO_RESUME = 3  # 下載途中斷線時自動續傳的次數（每次都會重�
 RESUME_DELAY = 5
 
 
+class RateMeter:
+    """用最近 window 秒實際下載的位元組數算速率。
+
+    yt-dlp 回報的是瞬間速率；YouTube 分段（chunk）傳送，每段開頭結尾會從幾 MB/s 跳到幾百 MB/s，
+    剩餘時間跟著亂跳。改用滑動視窗平均，數字才穩定可信。
+    """
+
+    def __init__(self, window: float = 10.0, clock=time.monotonic):
+        self.window, self.clock = window, clock
+        self.samples: deque[tuple[float, int]] = deque()
+        self.key = None
+        self.speed = self.eta = None
+
+    def update(self, key, done: int, total: int | None):
+        now = self.clock()
+        s = self.samples
+        # 換到下一個檔案（影片→音軌）、位元組數倒退，或停頓超過一個視窗（斷線續傳）→ 重新計算
+        if key != self.key or (s and (done < s[-1][1] or now - s[-1][0] > self.window)):
+            s.clear()
+            self.key = key
+            self.speed = self.eta = None
+        s.append((now, done))
+        while len(s) > 2 and now - s[1][0] >= self.window:
+            s.popleft()
+        span = now - s[0][0]
+        if span >= 1.0:
+            self.speed = (done - s[0][1]) / span
+            # total 可能只是估計值（total_bytes_estimate），已下載超過估計時不顯示負數
+            self.eta = int((total - done) / self.speed) if total and total > done and self.speed > 0 else None
+
+
 class Job:
     def __init__(self, url: str, options: dict, title: str | None,
                  job_id: str | None = None, job_dir: Path | None = None):
@@ -570,6 +601,7 @@ class Job:
         self.error = None
         self.log: deque[str] = deque(maxlen=200)
         self.cancel_flag = threading.Event()
+        self.rate = RateMeter()
         self.created = time.time()
         self.finished = None
 
@@ -695,6 +727,13 @@ PP_NAMES = {
 }
 
 
+def _pp_label(name: str | None) -> str:
+    """yt-dlp 回報的後處理名稱有時沒有 FFmpeg 前綴（例如 VideoRemuxer），兩種都查。"""
+    if not name:
+        return "後處理"
+    return PP_NAMES.get(name) or PP_NAMES.get(f"FFmpeg{name}") or name
+
+
 def run_job(job: Job):
     with MAX_PARALLEL:
         if job.cancel_flag.is_set():
@@ -743,10 +782,12 @@ def run_job(job: Job):
                     job.progress = round(min(100.0, done * 100 / total), 1)
                 elif d.get("fragment_count"):
                     job.progress = round((d.get("fragment_index") or 0) * 100 / d["fragment_count"], 1)
-                job.speed, job.eta = d.get("speed"), d.get("eta")
+                job.rate.update(d.get("filename"), done, total)
+                job.speed, job.eta = job.rate.speed, job.rate.eta
             elif st == "finished":
                 job.progress = 100.0
                 job.stage = "下載完成，處理中"
+                job.speed = job.eta = None
 
         def pp_hook(d):
             if job.cancel_flag.is_set():
@@ -754,7 +795,8 @@ def run_job(job: Job):
             if d.get("status") == "started":
                 job.status = "processing"
                 name = d.get("postprocessor")
-                job.stage = PP_NAMES.get(name, name or "後處理")
+                job.stage = _pp_label(name)
+                job.speed = job.eta = None
 
         opts["logger"] = JobLogger(job)
         opts["progress_hooks"] = [hook]

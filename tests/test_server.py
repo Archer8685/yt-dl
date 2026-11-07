@@ -238,5 +238,36 @@ def test_interrupted_job_is_restored_after_restart(tmp_path, monkeypatch):
     assert restored.partial_bytes() == 2048
 
 
+def test_rate_meter_smooths_bursty_chunks():
+    t = [0.0]
+    m = server.RateMeter(window=10, clock=lambda: t[0])
+    done, total = 0, 1_000_000_000
+    # 平均 10 MB/s，但以「瞬間爆量、再停頓」的 chunk 形式到達
+    for _ in range(30):
+        t[0] += 0.05
+        done += 5_000_000
+        m.update("a.part", done, total)
+        t[0] += 0.95
+        done += 5_000_000
+        m.update("a.part", done, total)
+    assert 9e6 < m.speed < 11e6
+    assert abs(m.eta - (total - done) / m.speed) <= 1
+    m.update("a.part", total + 10, total)  # 已下載超過估計大小 → 不顯示負的剩餘時間
+    assert m.eta is None
+    t[0] += 120  # 斷線兩分鐘後續傳：不能把停頓算進平均
+    m.update("a.part", done + 1, total)
+    assert m.speed is None
+    m.update("b.part", 100, total)  # 換檔案 → 重新計算，不沿用舊速率
+    assert m.speed is None and m.eta is None
+
+
+def test_postprocessor_labels_with_and_without_ffmpeg_prefix():
+    assert server._pp_label("VideoRemuxer") == "重新封裝容器"
+    assert server._pp_label("FFmpegVideoRemuxer") == "重新封裝容器"
+    assert server._pp_label("Merger") == "合併影音軌"
+    assert server._pp_label("SomethingNew") == "SomethingNew"
+    assert server._pp_label(None) == "後處理"
+
+
 def test_cookies_upload_rejects_non_netscape(client):
     assert client.post("/api/cookies", json={"text": "hello"}).status_code == 400
