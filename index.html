@@ -1,0 +1,1519 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YT 下載器</title>
+<meta name="description" content="一頁式影片下載器：影片、音訊、字幕、多音軌，支援多種格式與選項（yt-dlp + FFmpeg）">
+<meta name="theme-color" content="#060010">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235227ff'/%3E%3Cstop offset='.6' stop-color='%238b5cf6'/%3E%3Cstop offset='1' stop-color='%23ff6bd5'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E%3Cpath d='M32 14v24m0 0l-9-9m9 9l9-9M17 46h30' stroke='%23fff' stroke-width='5.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%235227ff'/%3E%3Cpath d='M32 14v24m0 0l-9-9m9 9l9-9M17 46h30' stroke='%23fff' stroke-width='5.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#060010; --bg2:#0d0716; --panel:rgba(255,255,255,.035); --panel-2:rgba(255,255,255,.06);
+  --line:rgba(255,255,255,.09); --line-2:rgba(255,255,255,.16);
+  --text:#f1eefc; --muted:#9a93b0; --dim:#6b6582;
+  --accent:#8b5cf6; --accent-2:#5227ff; --accent-3:#22d3ee; --pink:#ff6bd5;
+  --ok:#34d399; --warn:#fbbf24; --err:#f87171;
+  --r:14px; --r-sm:10px;
+  --font:Inter,"Noto Sans TC",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased}
+body{min-height:100vh;overflow-x:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:var(--accent-3)}
+::selection{background:rgba(139,92,246,.45)}
+
+/* ---------- Aurora background ---------- */
+.aurora{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.aurora i{position:absolute;border-radius:50%;filter:blur(90px);opacity:.55;mix-blend-mode:screen;animation:float 22s ease-in-out infinite alternate}
+.aurora i:nth-child(1){width:55vw;height:55vw;left:-10vw;top:-20vw;background:radial-gradient(circle,#5227ff 0%,transparent 65%)}
+.aurora i:nth-child(2){width:45vw;height:45vw;right:-12vw;top:-8vw;background:radial-gradient(circle,#ff6bd5 0%,transparent 65%);animation-duration:28s;opacity:.35}
+.aurora i:nth-child(3){width:50vw;height:50vw;left:25vw;top:30vh;background:radial-gradient(circle,#22d3ee 0%,transparent 65%);animation-duration:34s;opacity:.18}
+@keyframes float{0%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(6vw,4vh,0) scale(1.15)}100%{transform:translate3d(-4vw,8vh,0) scale(.95)}}
+.grid-bg{position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
+  background-size:48px 48px;mask-image:radial-gradient(ellipse at 50% 0%,#000 30%,transparent 75%)}
+#sparks{position:fixed;inset:0;z-index:100;pointer-events:none}
+
+.wrap{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:0 20px 120px}
+
+/* ---------- Nav ---------- */
+nav{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:-.01em}
+.logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--accent-2),var(--pink));display:grid;place-items:center;box-shadow:0 0 24px rgba(139,92,246,.6)}
+.logo svg{width:16px;height:16px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--panel);font-size:12px;color:var(--muted)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 10px var(--ok)}
+.dot.bad{background:var(--err);box-shadow:0 0 10px var(--err)}
+
+/* ---------- Hero ---------- */
+.hero{text-align:center;padding:48px 0 30px}
+.badge{display:inline-flex;align-items:center;gap:8px;padding:6px 14px 6px 6px;border-radius:999px;border:1px solid var(--line-2);background:rgba(255,255,255,.04);font-size:13px;color:var(--muted);margin-bottom:26px}
+.badge b{padding:2px 9px;border-radius:999px;background:linear-gradient(90deg,var(--accent-2),var(--accent));color:#fff;font-size:11px;font-weight:600}
+h1{font-size:clamp(38px,6.4vw,76px);line-height:1.02;letter-spacing:-.045em;margin:0 0 18px;font-weight:800}
+.gradient-text{background:linear-gradient(90deg,#a78bfa,#ff6bd5,#22d3ee,#a78bfa);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:gradmove 8s linear infinite}
+@keyframes gradmove{to{background-position:300% 0}}
+.shiny{color:#b5b5b5a4;background:linear-gradient(120deg,rgba(255,255,255,0) 40%,rgba(255,255,255,.9) 50%,rgba(255,255,255,0) 60%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:shine 4s linear infinite}
+@keyframes shine{0%{background-position:100%}100%{background-position:-100%}}
+.sub{color:var(--muted);font-size:17px;max-width:620px;margin:0 auto 34px;line-height:1.6}
+
+/* glowing input */
+.search{position:relative;max-width:820px;margin:0 auto;border-radius:18px;padding:1px;background:linear-gradient(120deg,rgba(139,92,246,.6),rgba(255,255,255,.08) 40%,rgba(34,211,238,.5));}
+.search::before{content:"";position:absolute;inset:-14px;border-radius:30px;background:radial-gradient(60% 80% at 50% 50%,rgba(139,92,246,.35),transparent 70%);filter:blur(18px);z-index:-1;opacity:.6;transition:opacity .3s}
+.search:focus-within::before{opacity:1}
+.search-inner{display:flex;gap:8px;align-items:center;background:rgba(10,6,20,.92);border-radius:17px;padding:8px}
+.search input{flex:1;min-width:0;background:transparent;border:0;outline:0;padding:12px 10px;font-size:16px}
+.search input::placeholder{color:var(--dim)}
+.hint{font-size:12.5px;color:var(--dim);margin-top:14px}
+.hint kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line-2);border-radius:5px;padding:1px 5px;color:var(--muted)}
+
+/* ---------- Buttons ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line-2);background:var(--panel-2);padding:10px 16px;border-radius:12px;cursor:pointer;font-weight:500;font-size:14px;transition:transform .15s,background .2s,border-color .2s,box-shadow .2s;white-space:nowrap}
+.btn:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25)}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.primary{border:0;background:linear-gradient(135deg,var(--accent-2),var(--accent) 60%,#c084fc);color:#fff;box-shadow:0 8px 30px -8px rgba(82,39,255,.8),inset 0 1px 0 rgba(255,255,255,.25)}
+.btn.primary:hover{box-shadow:0 10px 40px -6px rgba(139,92,246,.95),inset 0 1px 0 rgba(255,255,255,.3)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.btn.ghost:hover{color:var(--text);background:var(--panel)}
+.btn.sm{padding:6px 11px;font-size:12.5px;border-radius:9px}
+.btn.danger:hover{border-color:rgba(248,113,113,.5);color:var(--err)}
+.btn svg{width:16px;height:16px;flex:none}
+.spin{width:16px;height:16px;border-radius:50%;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;animation:rot .8s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+
+/* ---------- Spotlight cards ---------- */
+.card{position:relative;border-radius:var(--r);border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));padding:22px;overflow:hidden;--mx:50%;--my:50%}
+.card::before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(420px circle at var(--mx) var(--my),rgba(139,92,246,.13),transparent 45%);opacity:0;transition:opacity .35s}
+.card:hover::before{opacity:1}
+.card::after{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;background:radial-gradient(260px circle at var(--mx) var(--my),rgba(167,139,250,.55),transparent 50%);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;transition:opacity .35s}
+.card:hover::after{opacity:1}
+.card > *{position:relative}
+.card h3{margin:0 0 4px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:9px}
+.card h3 .ico{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;background:rgba(139,92,246,.15);border:1px solid rgba(139,92,246,.3);color:#c4b5fd}
+.card h3 .ico svg{width:15px;height:15px}
+.card .desc{color:var(--dim);font-size:12.5px;margin:0 0 16px}
+
+.section{margin-top:22px}
+.grid{display:grid;gap:18px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:900px){.g2,.g3{grid-template-columns:1fr}}
+.hidden{display:none!important}
+.reveal{animation:reveal .6s cubic-bezier(.2,.7,.2,1) both}
+@keyframes reveal{from{opacity:0;transform:translateY(16px);filter:blur(6px)}to{opacity:1;transform:none;filter:none}}
+
+/* ---------- Preview ---------- */
+.preview{display:grid;grid-template-columns:360px 1fr;gap:24px}
+@media (max-width:800px){.preview{grid-template-columns:1fr}}
+.thumb{position:relative;border-radius:12px;overflow:hidden;aspect-ratio:16/9;background:#111;border:1px solid var(--line)}
+.thumb img,.thumb iframe{width:100%;height:100%;object-fit:cover;display:block;border:0}
+.thumb .dur{position:absolute;right:8px;bottom:8px;background:rgba(0,0,0,.75);font-family:var(--mono);font-size:12px;padding:2px 7px;border-radius:6px}
+.thumb .play{position:absolute;inset:0;display:grid;place-items:center;background:linear-gradient(transparent,rgba(0,0,0,.35));cursor:pointer;border:0}
+.thumb .play span{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,.14);backdrop-filter:blur(8px);display:grid;place-items:center;border:1px solid rgba(255,255,255,.25);transition:transform .2s}
+.thumb .play:hover span{transform:scale(1.08)}
+.vtitle{font-size:22px;font-weight:700;letter-spacing:-.02em;margin:0 0 8px;line-height:1.3}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.tag{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted)}
+.tag.hl{color:#c4b5fd;border-color:rgba(139,92,246,.35);background:rgba(139,92,246,.1)}
+.vdesc{color:var(--muted);font-size:13px;line-height:1.6;max-height:88px;overflow:auto;white-space:pre-wrap;margin:0}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
+.stat{padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.03);border:1px solid var(--line)}
+.stat b{display:block;font-size:17px;font-variant-numeric:tabular-nums}
+.stat span{font-size:11.5px;color:var(--dim)}
+@media (max-width:560px){.stats{grid-template-columns:repeat(2,1fr)}}
+
+/* ---------- Mode tabs (animated pill) ---------- */
+.tabs{position:relative;display:flex;gap:4px;padding:5px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{position:relative;z-index:1;flex:1;border:0;background:transparent;padding:11px 14px;border-radius:10px;cursor:pointer;color:var(--muted);font-weight:500;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap;transition:color .25s}
+.tabs button svg{width:16px;height:16px}
+.tabs button.on{color:#fff}
+.tabs .ind{position:absolute;z-index:0;top:5px;bottom:5px;border-radius:10px;background:linear-gradient(135deg,rgba(82,39,255,.85),rgba(139,92,246,.85));box-shadow:0 6px 24px -6px rgba(139,92,246,.8),inset 0 1px 0 rgba(255,255,255,.2);transition:left .35s cubic-bezier(.3,.8,.3,1),width .35s cubic-bezier(.3,.8,.3,1)}
+.tabs.small button{padding:7px 12px;font-size:12.5px}
+
+/* ---------- Form controls ---------- */
+.field{margin-bottom:16px}
+.field:last-child{margin-bottom:0}
+.label{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-bottom:8px;font-weight:500}
+.label small{color:var(--dim);font-weight:400}
+.chips{display:flex;flex-wrap:wrap;gap:7px}
+.chip{border:1px solid var(--line);background:rgba(255,255,255,.03);padding:7px 12px;border-radius:9px;font-size:13px;cursor:pointer;color:var(--muted);transition:all .18s;display:inline-flex;align-items:center;gap:6px;user-select:none}
+.chip:hover{border-color:var(--line-2);color:var(--text)}
+.chip.on{color:#fff;border-color:rgba(139,92,246,.7);background:rgba(139,92,246,.18);box-shadow:0 0 0 3px rgba(139,92,246,.12)}
+.chip small{font-size:10.5px;color:var(--dim);font-family:var(--mono)}
+.chip.on small{color:#c4b5fd}
+.chip .badge-s{font-size:10px;padding:1px 6px;border-radius:5px;background:rgba(52,211,153,.15);color:var(--ok)}
+.input,.select,textarea.input{width:100%;background:rgba(0,0,0,.3);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13.5px;outline:0;transition:border-color .2s,box-shadow .2s}
+.input:focus,.select:focus{border-color:rgba(139,92,246,.7);box-shadow:0 0 0 3px rgba(139,92,246,.18)}
+.input.mono{font-family:var(--mono);font-size:12.5px}
+.select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%239a93b0' stroke-width='2'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px;cursor:pointer}
+.select option{background:#140d22}
+.row{display:flex;gap:10px;align-items:center}
+.row > *{flex:1}
+
+/* switch */
+.sw{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 0;border-bottom:1px dashed var(--line);cursor:pointer}
+.sw:last-child{border-bottom:0}
+.sw .t{font-size:13.5px}
+.sw .t small{display:block;color:var(--dim);font-size:11.5px;margin-top:2px}
+.sw input{display:none}
+.sw .k{flex:none;width:38px;height:22px;border-radius:999px;background:rgba(255,255,255,.1);border:1px solid var(--line-2);position:relative;transition:background .25s}
+.sw .k::after{content:"";position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:2px;left:2px;transition:transform .25s cubic-bezier(.3,.8,.3,1);box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.sw input:checked + .k{background:linear-gradient(135deg,var(--accent-2),var(--accent));border-color:transparent}
+.sw input:checked + .k::after{transform:translateX(16px)}
+
+/* range slider */
+input[type=range]{width:100%;accent-color:var(--accent)}
+
+/* collapsible */
+details.adv{border-radius:var(--r);border:1px solid var(--line);background:rgba(255,255,255,.02);margin-top:18px}
+details.adv summary{cursor:pointer;list-style:none;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;font-weight:600;font-size:14.5px}
+details.adv summary::-webkit-details-marker{display:none}
+details.adv summary .chev{transition:transform .25s;color:var(--muted)}
+details.adv[open] summary .chev{transform:rotate(180deg)}
+details.adv .body{padding:0 20px 20px}
+
+/* ---------- format table ---------- */
+.tbl-wrap{max-height:420px;overflow:auto;border-radius:10px;border:1px solid var(--line)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{padding:8px 10px;text-align:left;white-space:nowrap;border-bottom:1px solid rgba(255,255,255,.05)}
+th{position:sticky;top:0;background:#120b1f;color:var(--dim);font-weight:500;font-size:11.5px;cursor:pointer;user-select:none;z-index:1}
+th:hover{color:var(--text)}
+tbody tr{cursor:pointer;transition:background .15s}
+tbody tr:hover{background:rgba(255,255,255,.04)}
+tbody tr.sel{background:rgba(139,92,246,.16)}
+td.mono{font-family:var(--mono);font-size:12px}
+.k-av{color:var(--accent-3)} .k-video{color:#c4b5fd} .k-audio{color:var(--pink)}
+.selbox{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--line-2);display:inline-grid;place-items:center}
+tr.sel .selbox{background:var(--accent);border-color:var(--accent)}
+tr.sel .selbox::after{content:"";width:6px;height:6px;border-radius:2px;background:#fff}
+
+/* playlist */
+.plist{max-height:440px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.pitem{display:flex;align-items:center;gap:12px;padding:8px;border-radius:10px;border:1px solid transparent;cursor:pointer}
+.pitem:hover{background:rgba(255,255,255,.03)}
+.pitem.on{border-color:rgba(139,92,246,.4);background:rgba(139,92,246,.08)}
+.pitem img{width:96px;aspect-ratio:16/9;object-fit:cover;border-radius:7px;background:#111;flex:none}
+.pitem .n{font-family:var(--mono);color:var(--dim);font-size:12px;width:28px;text-align:right;flex:none}
+.pitem .tt{font-size:13.5px;line-height:1.35}
+.pitem .tt small{display:block;color:var(--dim);font-size:11.5px;margin-top:3px}
+
+/* sub list */
+.sublist{max-height:220px;overflow:auto;padding:2px}
+
+/* ---------- action bar ---------- */
+.actionbar{position:sticky;bottom:16px;z-index:20;margin-top:26px;display:flex;align-items:center;gap:14px;padding:12px 12px 12px 20px;border-radius:18px;border:1px solid var(--line-2);background:rgba(14,9,26,.78);backdrop-filter:blur(18px) saturate(1.4);box-shadow:0 20px 60px -20px rgba(0,0,0,.8)}
+.actionbar .summary{flex:1;min-width:0;font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.actionbar .summary b{color:var(--text);font-weight:600}
+.btn.big{padding:13px 24px;font-size:15px;border-radius:13px}
+
+/* ---------- jobs ---------- */
+.job{padding:16px 18px;border-radius:var(--r);border:1px solid var(--line);background:rgba(255,255,255,.025);margin-bottom:12px}
+.job-top{display:flex;align-items:center;gap:12px}
+.job-title{flex:1;min-width:0;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.status{font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line-2);color:var(--muted);flex:none}
+.status.done{color:var(--ok);border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.08)}
+.status.error{color:var(--err);border-color:rgba(248,113,113,.4);background:rgba(248,113,113,.08)}
+.status.downloading,.status.processing{color:#c4b5fd;border-color:rgba(139,92,246,.45);background:rgba(139,92,246,.1)}
+.bar{height:6px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden;margin:12px 0 8px}
+.bar i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--accent-2),var(--accent),var(--pink));background-size:200% 100%;animation:barmove 2s linear infinite;transition:width .4s}
+.bar.indet i{width:35%!important;animation:indet 1.3s ease-in-out infinite}
+@keyframes barmove{to{background-position:200% 0}}
+@keyframes indet{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
+.job-sub{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--dim);font-family:var(--mono)}
+.files{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.file{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;background:rgba(0,0,0,.25);border:1px solid var(--line);font-size:12.5px}
+.file .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file .fs{color:var(--dim);font-family:var(--mono);font-size:11.5px}
+.ext{font-family:var(--mono);font-size:10.5px;padding:2px 6px;border-radius:5px;background:rgba(139,92,246,.18);color:#c4b5fd;text-transform:uppercase}
+.err-box{margin-top:10px;padding:10px 12px;border-radius:9px;background:rgba(248,113,113,.07);border:1px solid rgba(248,113,113,.25);color:#fecaca;font-size:12.5px;white-space:pre-wrap;word-break:break-word}
+pre.log{margin:10px 0 0;max-height:220px;overflow:auto;padding:10px 12px;border-radius:9px;background:rgba(0,0,0,.45);border:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:#b8b1cc;white-space:pre-wrap;word-break:break-all}
+.empty{text-align:center;color:var(--dim);font-size:13px;padding:26px 0}
+
+/* toast */
+#toasts{position:fixed;top:18px;right:18px;z-index:200;display:flex;flex-direction:column;gap:10px}
+.toast{padding:12px 16px;border-radius:12px;background:rgba(20,13,34,.92);border:1px solid var(--line-2);backdrop-filter:blur(12px);font-size:13.5px;max-width:380px;animation:reveal .4s both;box-shadow:0 10px 30px -10px #000}
+.toast.err{border-color:rgba(248,113,113,.5)}
+.toast.ok{border-color:rgba(52,211,153,.5)}
+
+/* skeleton */
+.skel{border-radius:10px;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.09),rgba(255,255,255,.04));background-size:200% 100%;animation:skel 1.3s infinite}
+@keyframes skel{to{background-position:-200% 0}}
+
+footer{margin-top:60px;text-align:center;color:var(--dim);font-size:12px;line-height:1.8}
+@media (max-width:640px){
+  .wrap{padding:0 16px 120px}
+  .search-inner{flex-wrap:wrap}
+  .search input{flex-basis:100%}
+  .search-inner .btn{flex:1}
+  .actionbar{flex-wrap:wrap;padding:12px}
+  .actionbar .summary{flex-basis:100%;white-space:normal}
+  .actionbar .btn{flex:1}
+  .card{padding:18px}
+}
+/* ---------- simple mode presets ---------- */
+.presets{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+.preset{position:relative;text-align:left;border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));border-radius:var(--r);padding:18px;cursor:pointer;display:flex;flex-direction:column;gap:10px;transition:transform .2s,border-color .2s,box-shadow .25s;overflow:hidden;--mx:50%;--my:50%}
+.preset::before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(300px circle at var(--mx) var(--my),rgba(139,92,246,.18),transparent 50%);opacity:0;transition:opacity .3s}
+.preset:hover{transform:translateY(-3px);border-color:rgba(139,92,246,.55);box-shadow:0 14px 40px -14px rgba(139,92,246,.7)}
+.preset:hover::before{opacity:1}
+.preset:active{transform:translateY(-1px) scale(.98)}
+.preset:disabled{opacity:.5;cursor:wait}
+.preset .pi{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(135deg,rgba(82,39,255,.35),rgba(139,92,246,.25));border:1px solid rgba(139,92,246,.4);color:#ddd6fe}
+.preset .pi svg{width:20px;height:20px}
+.preset b{font-size:16px;letter-spacing:-.01em}
+.preset span.ps{font-size:12.5px;color:var(--muted)}
+.preset .go{position:absolute;right:16px;top:18px;color:var(--dim);transition:color .2s,transform .2s}
+.preset:hover .go{color:#c4b5fd;transform:translateX(3px)}
+.preset.gold .pi{background:linear-gradient(135deg,rgba(251,191,36,.35),rgba(245,158,11,.2));border-color:rgba(251,191,36,.5);color:#fde68a}
+.preset.locked{border-style:dashed}
+.preset.locked b{color:var(--muted)}
+.ui-switch{flex:none}
+
+/* ---------- modal ---------- */
+.modal{position:fixed;inset:0;z-index:150;display:grid;place-items:center;padding:16px;background:rgba(3,0,10,.7);backdrop-filter:blur(6px);animation:reveal .25s both}
+.modal-box{width:min(720px,100%);max-height:calc(100vh - 32px);overflow:auto;background:linear-gradient(180deg,#160d27,#0d0718)!important;border-color:var(--line-2)!important;box-shadow:0 30px 80px -20px #000}
+.modal-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:6px}
+.modal-head h3{flex:1;font-size:18px!important}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px;counter-reset:st}
+.steps > li{position:relative;padding-left:40px;counter-increment:st}
+.steps > li::before{content:counter(st);position:absolute;left:0;top:0;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12.5px;font-weight:700;background:linear-gradient(135deg,var(--accent-2),var(--accent));color:#fff}
+.steps > li > b{display:block;font-size:14px;margin:3px 0 8px}
+.steps .desc{margin:0 0 8px}
+.note{padding:10px 12px;border-radius:10px;font-size:12.5px;line-height:1.6;background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.25);color:#fde68a}
+.drop{border:1.5px dashed var(--line-2);border-radius:12px;padding:22px;text-align:center;color:var(--muted);font-size:13.5px;cursor:pointer;transition:border-color .2s,background .2s}
+.drop:hover,.drop.over{border-color:var(--accent);background:rgba(139,92,246,.08);color:var(--text)}
+.auth-result{margin-top:16px;padding:14px 16px;border-radius:12px;border:1px solid var(--line);background:rgba(0,0,0,.25);font-size:13.5px;line-height:1.6}
+.auth-result.ok{border-color:rgba(52,211,153,.45);background:rgba(52,211,153,.07)}
+.auth-result.gold{border-color:rgba(251,191,36,.5);background:rgba(251,191,36,.08)}
+.auth-result.bad{border-color:rgba(248,113,113,.45);background:rgba(248,113,113,.07)}
+.tag.auth-ok{color:var(--ok);border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.08)}
+.tag.auth-gold{color:var(--warn);border-color:rgba(251,191,36,.45);background:rgba(251,191,36,.1)}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="aurora"><i></i><i></i><i></i></div>
+<div class="grid-bg"></div>
+<canvas id="sparks"></canvas>
+<div id="toasts"></div>
+
+<div class="wrap">
+  <nav>
+    <div class="brand">
+      <div class="logo"><svg viewBox="0 0 24 24" fill="#fff"><path d="M12 3v11m0 0l-4.5-4.5M12 14l4.5-4.5M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      YT Downloader
+    </div>
+    <div class="row" style="flex:none;gap:8px">
+      <div class="tabs small ui-switch" id="uiTabs"><span class="ind"></span><button data-ui="simple" class="on">簡易</button><button data-ui="advanced">進階</button></div>
+      <button class="btn sm primary hidden" id="updateBtn" title="更新 yt-dlp 到最新版">更新 yt-dlp</button>
+      <button class="pill" id="envPill" title="引擎設定" style="cursor:pointer"><span class="dot"></span><span>連線中…</span></button>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="badge"><b>yt-dlp</b><span class="shiny">影片 · 音訊 · 字幕 · 多音軌 · 播放清單</span></div>
+    <h1>下載任何影片<br><span class="gradient-text">想要的格式都有</span></h1>
+    <p class="sub">貼上 YouTube（或其他 1000+ 網站）網址，自由選擇畫質、編碼、容器、音軌語言、字幕與後製選項。</p>
+    <form class="search" id="urlForm" autocomplete="off">
+      <div class="search-inner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b6582" stroke-width="2" style="margin-left:8px;flex:none"><path d="M10 14a5 5 0 007.07 0l3-3a5 5 0 00-7.07-7.07l-1 1M14 10a5 5 0 00-7.07 0l-3 3a5 5 0 007.07 7.07l1-1" stroke-linecap="round"/></svg>
+        <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." required>
+        <button type="button" class="btn ghost" id="pasteBtn" title="貼上剪貼簿">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2h2"/></svg>貼上
+        </button>
+        <button type="submit" class="btn primary" id="analyzeBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5" stroke-linecap="round"/></svg>解析
+        </button>
+      </div>
+    </form>
+    <div class="hint">
+      <label style="cursor:pointer"><input type="checkbox" id="asPlaylist" style="accent-color:var(--accent);vertical-align:-2px"> 網址含播放清單時，下載整個清單</label>
+      &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>V</kbd> 貼上後按 <kbd>Enter</kbd>
+    </div>
+  </section>
+
+  <!-- BACKEND SETUP (顯示於連不到後端時，例如從 GitHub Pages 開啟) -->
+  <section id="setupCard" class="card section hidden">
+    <h3><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>連線到本機下載引擎</h3>
+    <p class="desc">這個網頁只是操作介面，實際下載由你電腦上的 yt-dlp 引擎執行（GitHub Pages 無法執行 yt-dlp）。第一次使用請先啟動引擎：</p>
+    <div class="grid g2">
+      <div>
+        <div class="label">1. 下載專案並啟動（會自動安裝 / 更新 yt-dlp）</div>
+        <pre class="log" style="margin:0;max-height:none">git clone https://github.com/Archer8685/yt-dl.git
+cd yt-dl
+start.bat        # Windows
+./start.sh       # macOS / Linux</pre>
+        <p class="desc" style="margin:10px 0 0">需要 Python 3.10+、FFmpeg、Node.js 或 Deno。</p>
+      </div>
+      <div>
+        <div class="label">2. 引擎位址</div>
+        <div class="row">
+          <input class="input mono" id="apiBase" placeholder="http://127.0.0.1:8765">
+          <button class="btn primary" id="apiConnect" style="flex:none">連線</button>
+        </div>
+        <p class="desc" style="margin:10px 0 0">Chrome 若跳出「允許存取區域網路裝置」請選允許。Safari 不支援從 https 網站連線到本機，請改用 Chrome / Edge / Firefox，或直接開 http://127.0.0.1:8765。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- LOADING SKELETON -->
+  <section id="skeleton" class="hidden card section">
+    <div class="preview">
+      <div class="skel" style="aspect-ratio:16/9"></div>
+      <div><div class="skel" style="height:26px;width:80%;margin-bottom:12px"></div><div class="skel" style="height:16px;width:50%;margin-bottom:24px"></div><div class="skel" style="height:70px"></div></div>
+    </div>
+  </section>
+
+  <!-- RESULT -->
+  <section id="result" class="hidden">
+    <!-- preview -->
+    <div class="card section reveal" id="previewCard"></div>
+
+    <!-- playlist -->
+    <div class="card section reveal hidden" id="playlistCard">
+      <h3><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h7M17 15l5 3-5 3z"/></svg></span>播放清單項目</h3>
+      <p class="desc">點選要下載的影片（播放清單模式僅能使用自動格式預設，不支援逐支手動選格式）</p>
+      <div class="row" style="margin-bottom:12px;flex-wrap:wrap">
+        <button class="btn sm" id="plAll" style="flex:none">全選</button>
+        <button class="btn sm" id="plNone" style="flex:none">全不選</button>
+        <input class="input mono" id="plRange" placeholder="或輸入範圍，例：1-5,8,10:20" style="flex:1;min-width:200px">
+      </div>
+      <div class="plist" id="plist"></div>
+    </div>
+
+    <!-- SIMPLE MODE：一鍵預設 -->
+    <div class="section reveal" id="simpleWrap">
+      <div class="row" style="margin-bottom:14px;flex-wrap:wrap">
+        <h2 style="margin:0;font-size:18px;letter-spacing:-.02em;flex:1">選擇格式，一鍵下載</h2>
+        <span class="tag auth-status open-auth" style="flex:none;cursor:pointer">未登入</span>
+      </div>
+      <div class="presets" id="presets"></div>
+      <p class="desc" style="margin:14px 0 0;text-align:center">需要更多選項（多音軌、手動格式、剪輯、SponsorBlock…）？切換到右上角的 <a href="#" id="goAdvanced">進階模式</a></p>
+    </div>
+
+    <div id="advancedWrap">
+    <!-- mode -->
+    <div class="section reveal">
+      <div class="tabs" id="modeTabs">
+        <span class="ind"></span>
+        <button data-mode="av" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="M17 10l5-3v10l-5-3z"/></svg>影片＋音訊</button>
+        <button data-mode="video"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="M17 10l5-3v10l-5-3zM5 9l7 6"/></svg>僅影片</button>
+        <button data-mode="audio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>僅音訊</button>
+        <button data-mode="subs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 12h3M14 12h3M7 16h10"/></svg>僅字幕</button>
+        <button data-mode="thumb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>僅縮圖</button>
+      </div>
+    </div>
+
+    <div class="grid g2 section">
+      <!-- VIDEO -->
+      <div class="card reveal" id="videoCard">
+        <h3><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="M17 10l5-3v10l-5-3z"/></svg></span>影片設定</h3>
+        <p class="desc">自動挑選符合條件的最佳畫質（若在下方格式表手動選取則以手動為準）</p>
+        <div class="field">
+          <div class="label">最高畫質 <small id="qHint"></small></div>
+          <div class="chips" id="qualityChips"></div>
+        </div>
+        <div class="field">
+          <div class="label">影片編碼偏好</div>
+          <div class="chips" data-group="codec">
+            <span class="chip on" data-v="">自動</span>
+            <span class="chip" data-v="av01">AV1</span>
+            <span class="chip" data-v="vp9">VP9</span>
+            <span class="chip" data-v="h264">H.264 <small>相容性最佳</small></span>
+            <span class="chip" data-v="h265">H.265</span>
+          </div>
+        </div>
+        <div class="field grid g2" style="gap:12px">
+          <div>
+            <div class="label">輸出容器</div>
+            <select class="select" id="container">
+              <option value="">自動（保留原始）</option>
+              <option value="mp4" selected>MP4</option>
+              <option value="mkv">MKV（多音軌/字幕最佳）</option>
+              <option value="webm">WebM</option>
+              <option value="mov">MOV</option>
+              <option value="avi">AVI</option>
+              <option value="flv">FLV</option>
+            </select>
+          </div>
+          <div>
+            <div class="label">畫面更新率</div>
+            <select class="select" id="maxFps">
+              <option value="">不限（偏好高 FPS）</option>
+              <option value="60">≤ 60 fps</option>
+              <option value="30">≤ 30 fps</option>
+              <option value="25">≤ 25 fps</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <div class="label">動態範圍</div>
+          <div class="chips" data-group="hdr">
+            <span class="chip on" data-v="">自動</span>
+            <span class="chip" data-v="hdr">偏好 HDR</span>
+            <span class="chip" data-v="sdr">僅 SDR</span>
+          </div>
+        </div>
+        <label class="sw"><span class="t">YouTube Premium 高位元率 <span class="badge-s" style="background:rgba(251,191,36,.15);color:var(--warn)">Premium</span><small>優先下載 Premium 專屬的 1080p 高位元率串流（需先 <a href="#" class="open-auth">登入 Premium 帳號</a>）</small></span><input type="checkbox" id="premium"><span class="k"></span></label>
+        <label class="sw"><span class="t">重新編碼（而非重新封裝）<small>容器不相容時強制轉檔，較慢但保證格式</small></span><input type="checkbox" id="recode"><span class="k"></span></label>
+        <label class="sw"><span class="t">偏好較小檔案<small>同條件下優先選擇檔案最小者</small></span><input type="checkbox" id="preferSize"><span class="k"></span></label>
+      </div>
+
+      <!-- AUDIO -->
+      <div class="card reveal" id="audioCard">
+        <h3><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span>音訊設定</h3>
+        <p class="desc">支援多音軌：選擇多種語言會一併合併進影片（建議 MKV / MP4）</p>
+        <div class="field" id="trackField">
+          <div class="label">音軌語言 <small>可複選</small></div>
+          <div class="chips" id="trackChips"></div>
+        </div>
+        <div class="field" id="audioCodecField">
+          <div class="label">轉換格式 <small>僅音訊模式</small></div>
+          <div class="chips" data-group="acodec">
+            <span class="chip on" data-v="best">原始</span>
+            <span class="chip" data-v="mp3">MP3</span>
+            <span class="chip" data-v="m4a">M4A</span>
+            <span class="chip" data-v="aac">AAC</span>
+            <span class="chip" data-v="opus">Opus</span>
+            <span class="chip" data-v="vorbis">OGG</span>
+            <span class="chip" data-v="flac">FLAC</span>
+            <span class="chip" data-v="wav">WAV</span>
+            <span class="chip" data-v="alac">ALAC</span>
+          </div>
+        </div>
+        <div class="field" id="audioQField">
+          <div class="label">音質 / 位元率 <small id="aqLabel">最佳 (VBR 0)</small></div>
+          <select class="select" id="aquality">
+            <option value="0">最佳 (VBR 0)</option>
+            <option value="320K">320 kbps</option>
+            <option value="256K">256 kbps</option>
+            <option value="192K">192 kbps</option>
+            <option value="160K">160 kbps</option>
+            <option value="128K">128 kbps</option>
+            <option value="96K">96 kbps</option>
+            <option value="64K">64 kbps</option>
+            <option value="2">VBR 2（高）</option>
+            <option value="5">VBR 5（中）</option>
+            <option value="9">VBR 9（低）</option>
+          </select>
+        </div>
+        <div class="field" id="aPreferField">
+          <div class="label">合併時音訊編碼偏好</div>
+          <div class="chips" data-group="aprefer">
+            <span class="chip on" data-v="">自動</span>
+            <span class="chip" data-v="opus">Opus</span>
+            <span class="chip" data-v="aac">AAC</span>
+          </div>
+        </div>
+        <label class="sw"><span class="t">允許 DRC 音軌<small>動態範圍壓縮版本（音量較平均）</small></span><input type="checkbox" id="allowDrc"><span class="k"></span></label>
+      </div>
+    </div>
+
+    <!-- SUBTITLES -->
+    <div class="card section reveal" id="subsCard">
+      <h3><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 12h3M14 12h3M7 16h10"/></svg></span>字幕</h3>
+      <p class="desc">上傳者字幕與自動產生 / 自動翻譯字幕，皆可複選</p>
+      <div class="grid g2">
+        <div>
+          <div class="field">
+            <div class="label">上傳者字幕 <small id="subCount"></small></div>
+            <div class="chips sublist" id="subChips"></div>
+          </div>
+          <div class="field">
+            <div class="label">自動字幕 / 自動翻譯 <small id="autoCount"></small></div>
+            <input class="input" id="autoSearch" placeholder="搜尋語言，例：中文、zh、Japanese…" style="margin-bottom:8px">
+            <div class="chips sublist" id="autoChips"></div>
+          </div>
+        </div>
+        <div>
+          <div class="field">
+            <div class="label">字幕格式</div>
+            <div class="chips" data-group="subfmt">
+              <span class="chip" data-v="best">原始</span>
+              <span class="chip on" data-v="srt">SRT</span>
+              <span class="chip" data-v="vtt">VTT</span>
+              <span class="chip" data-v="ass">ASS</span>
+              <span class="chip" data-v="lrc">LRC</span>
+            </div>
+          </div>
+          <label class="sw"><span class="t">嵌入影片<small>寫入 MP4 / MKV / WebM 字幕軌</small></span><input type="checkbox" id="subEmbed" checked><span class="k"></span></label>
+          <label class="sw"><span class="t">同時保留字幕檔<small>嵌入後仍輸出獨立字幕檔</small></span><input type="checkbox" id="subKeep" checked><span class="k"></span></label>
+          <label class="sw"><span class="t">下載所有上傳者字幕<small>忽略左側選擇</small></span><input type="checkbox" id="subAll"><span class="k"></span></label>
+          <div class="row" style="margin-top:12px;flex-wrap:wrap">
+            <button class="btn sm" id="subPickZh" style="flex:none">快速選：中文</button>
+            <button class="btn sm" id="subPickEn" style="flex:none">英文</button>
+            <button class="btn sm ghost" id="subClear" style="flex:none">清除</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FORMAT TABLE -->
+    <details class="adv reveal" id="fmtDetails">
+      <summary><span>📋 手動選擇格式 <small style="color:var(--dim);font-weight:400" id="fmtSel"></small></span><svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></summary>
+      <div class="body">
+        <p class="desc" style="color:var(--dim);font-size:12.5px;margin:0 0 12px">點一下影片列 = 指定影片串流（單選）；點音訊列 = 加入音軌（可複選，多選即為多音軌合併）。再點一次取消。</p>
+        <div class="row" style="margin-bottom:12px;flex-wrap:wrap">
+          <div class="tabs small" id="fmtTabs" style="flex:none">
+            <span class="ind"></span>
+            <button data-k="all" class="on">全部</button>
+            <button data-k="video">影片</button>
+            <button data-k="audio">音訊</button>
+            <button data-k="av">影音合併</button>
+          </div>
+          <button class="btn sm ghost" id="fmtClear" style="flex:none">清除選取</button>
+        </div>
+        <div class="tbl-wrap"><table id="fmtTable"><thead><tr>
+          <th></th><th data-s="id">ID</th><th data-s="kind">類型</th><th data-s="ext">格式</th><th data-s="height">解析度</th><th data-s="fps">FPS</th>
+          <th data-s="vcodec">影片編碼</th><th data-s="acodec">音訊編碼</th><th data-s="tbr">位元率</th><th data-s="asr">取樣</th><th data-s="language">語言</th><th data-s="filesize">大小</th><th data-s="note">備註</th>
+        </tr></thead><tbody></tbody></table></div>
+      </div>
+    </details>
+
+    <!-- EXTRAS -->
+    <details class="adv reveal" open>
+      <summary><span>✨ 後製與附加選項</span><svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></summary>
+      <div class="body">
+        <div class="grid g3">
+          <div class="card">
+            <h3>中繼資料 &amp; 封面</h3><p class="desc">寫入影片檔內</p>
+            <label class="sw"><span class="t">嵌入中繼資料<small>標題、作者、日期、描述</small></span><input type="checkbox" id="embedMeta" checked><span class="k"></span></label>
+            <label class="sw"><span class="t">嵌入章節</span><input type="checkbox" id="embedChapters" checked><span class="k"></span></label>
+            <label class="sw"><span class="t">嵌入封面縮圖</span><input type="checkbox" id="embedThumb" checked><span class="k"></span></label>
+            <label class="sw"><span class="t">另存縮圖檔</span><input type="checkbox" id="writeThumb"><span class="k"></span></label>
+            <div class="field" style="margin-top:10px">
+              <div class="label">縮圖格式</div>
+              <div class="chips" data-group="thumbfmt"><span class="chip on" data-v="jpg">JPG</span><span class="chip" data-v="png">PNG</span><span class="chip" data-v="webp">WebP</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>剪輯</h3><p class="desc">只下載部分 / 切割</p>
+            <div class="field">
+              <div class="label">時間範圍 <small>可多段，逗號分隔</small></div>
+              <input class="input mono" id="sections" placeholder="例：0:30-1:45, 3:00-end">
+              <div class="chips" id="chapterChips" style="margin-top:8px"></div>
+            </div>
+            <label class="sw"><span class="t">依章節切割成多檔</span><input type="checkbox" id="splitChapters"><span class="k"></span></label>
+            <label class="sw"><span class="t">切點強制關鍵影格<small>切割更精準（需重新編碼）</small></span><input type="checkbox" id="forceKf"><span class="k"></span></label>
+            <label class="sw"><span class="t">直播從頭下載</span><input type="checkbox" id="liveStart"><span class="k"></span></label>
+          </div>
+          <div class="card">
+            <h3>SponsorBlock</h3><p class="desc">社群標記的片段：移除或標記成章節</p>
+            <div class="field">
+              <div class="label">移除片段</div>
+              <div class="chips" id="sbRemove"></div>
+            </div>
+            <div class="field">
+              <div class="label">標記為章節</div>
+              <div class="chips" id="sbMark"></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>附加檔案</h3><p class="desc">輸出額外資訊</p>
+            <label class="sw"><span class="t">影片說明 (.description)</span><input type="checkbox" id="writeDesc"><span class="k"></span></label>
+            <label class="sw"><span class="t">完整資訊 (.info.json)</span><input type="checkbox" id="writeInfo"><span class="k"></span></label>
+            <label class="sw"><span class="t">留言（寫入 info.json）<small>留言多時會很慢</small></span><input type="checkbox" id="writeComments"><span class="k"></span></label>
+            <label class="sw"><span class="t">保留合併前原始檔</span><input type="checkbox" id="keepOrig"><span class="k"></span></label>
+          </div>
+          <div class="card">
+            <h3>檔名</h3><p class="desc">yt-dlp 輸出範本</p>
+            <div class="field">
+              <select class="select" id="tplPreset" style="margin-bottom:8px">
+                <option value="%(title)s [%(id)s].%(ext)s">標題 [ID]</option>
+                <option value="%(title)s.%(ext)s">標題</option>
+                <option value="%(uploader)s - %(title)s.%(ext)s">作者 - 標題</option>
+                <option value="%(upload_date>%Y-%m-%d)s %(title)s.%(ext)s">日期 標題</option>
+                <option value="%(playlist_index|)s %(title)s.%(ext)s">清單序號 標題</option>
+                <option value="%(uploader)s/%(title)s.%(ext)s">作者資料夾/標題</option>
+                <option value="custom">自訂…</option>
+              </select>
+              <input class="input mono" id="template" value="%(title)s [%(id)s].%(ext)s">
+            </div>
+            <label class="sw"><span class="t">限制為 ASCII 檔名<small>移除空白與特殊字元</small></span><input type="checkbox" id="restrictNames"><span class="k"></span></label>
+          </div>
+          <div class="card">
+            <h3>網路</h3><p class="desc">代理、Cookie、速度</p>
+            <div class="field"><div class="label">YouTube 登入 <small>Premium / 會員 / 年齡限制</small></div>
+              <div class="row" style="flex-wrap:wrap">
+                <span class="tag auth-status" style="flex:none">未登入</span>
+                <button class="btn sm open-auth" style="flex:none">設定登入</button>
+              </div>
+            </div>
+            <div class="field"><div class="label">代理伺服器</div><input class="input mono" id="proxy" placeholder="socks5://127.0.0.1:1080"></div>
+            <div class="field grid g2" style="gap:10px">
+              <div><div class="label">限速</div><input class="input mono" id="rateLimit" placeholder="例：5M"></div>
+              <div><div class="label">地區</div><input class="input mono" id="geo" placeholder="TW" maxlength="2"></div>
+            </div>
+            <div class="field grid g2" style="gap:10px">
+              <div><div class="label">並行分段 <small id="fragV">4</small></div><input type="range" id="fragments" min="1" max="16" value="4"></div>
+              <div><div class="label">重試次數</div><input class="input mono" id="retries" type="number" min="0" max="50" value="10"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- ACTION BAR -->
+    <div class="actionbar">
+      <div class="summary" id="summary"></div>
+      <button class="btn" id="resetBtn" title="重設選項" style="flex:none">重設</button>
+      <button class="btn primary big" id="downloadBtn" style="flex:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 19h16"/></svg>開始下載
+      </button>
+    </div>
+    </div><!-- /advancedWrap -->
+  </section>
+
+  <!-- JOBS -->
+  <section class="section" style="margin-top:46px">
+    <div class="row" style="margin-bottom:14px">
+      <h2 style="margin:0;font-size:20px;letter-spacing:-.02em;flex:1">下載佇列</h2>
+      <button class="btn sm ghost" id="clearDone" style="flex:none">清除已完成</button>
+    </div>
+    <div id="jobs"><div class="empty">尚無下載工作</div></div>
+  </section>
+
+  <footer>
+    Powered by <a href="https://github.com/yt-dlp/yt-dlp" target="_blank" rel="noopener">yt-dlp</a> &amp; <a href="https://ffmpeg.org" target="_blank" rel="noopener">FFmpeg</a> · 下載完成的檔案可直接在上方「下載佇列」取得<br>
+    請僅下載你有權使用的內容，並遵守各平台服務條款與著作權法。
+  </footer>
+</div>
+
+<!-- AUTH WIZARD -->
+<div class="modal hidden" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+  <div class="card modal-box">
+    <div class="modal-head">
+      <h3 id="authTitle"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></svg></span>登入 YouTube 帳號</h3>
+      <button class="btn sm ghost" id="authClose" aria-label="關閉">✕</button>
+    </div>
+    <p class="desc">登入後可下載 <b style="color:var(--warn)">Premium 1080p 高位元率</b>、頻道會員影片與年齡限制影片。不會要你輸入密碼，而是讓下載引擎借用你瀏覽器的登入狀態（Cookie）；Cookie 只存在你自己的電腦。</p>
+
+    <div class="tabs small" id="authTabs" style="margin-bottom:18px">
+      <span class="ind"></span>
+      <button data-m="browser" class="on">方法一：從瀏覽器讀取（最快）</button>
+      <button data-m="file">方法二：匯出 cookies.txt（最穩）</button>
+    </div>
+
+    <div id="authBrowser">
+      <ol class="steps">
+        <li><b>在瀏覽器登入 YouTube</b>
+          <p class="desc">用你平常的瀏覽器打開 YouTube，確認右上角有你的頭像（Premium 帳號左上角會顯示 Premium 標誌）。</p>
+          <a class="btn sm" href="https://www.youtube.com" target="_blank" rel="noopener">開啟 YouTube ↗</a></li>
+        <li><b>選擇你登入的瀏覽器</b>
+          <div class="chips" id="authBrowsers"></div></li>
+        <li><b>測試並套用</b>
+          <div class="note hidden" id="chromeNote" style="margin-bottom:10px">⚠ Windows 版 Chrome / Edge 等瀏覽器會鎖住並加密 Cookie。請<b>先完全關閉該瀏覽器</b>（包含背景執行）再按測試；若仍失敗，請改用 Firefox 或「方法二」。</div>
+          <button class="btn primary" id="authTestBrowser">測試登入</button></li>
+      </ol>
+    </div>
+
+    <div id="authFile" class="hidden">
+      <ol class="steps">
+        <li><b>安裝匯出擴充功能</b>
+          <p class="desc">安裝「Get cookies.txt LOCALLY」（只在本機匯出，不會上傳到任何伺服器）。</p>
+          <div class="row" style="flex-wrap:wrap;justify-content:flex-start">
+            <a class="btn sm" style="flex:none" href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" target="_blank" rel="noopener">Chrome / Edge / Brave ↗</a>
+            <a class="btn sm" style="flex:none" href="https://addons.mozilla.org/firefox/addon/get-cookies-txt-locally/" target="_blank" rel="noopener">Firefox ↗</a>
+          </div></li>
+        <li><b>在 YouTube 頁面匯出</b>
+          <p class="desc">打開 <a href="https://www.youtube.com" target="_blank" rel="noopener">youtube.com</a>（已登入）→ 點工具列的擴充功能圖示 → 按 <b>Export</b>，會下載一個 <code>www.youtube.com_cookies.txt</code>。</p>
+          <div class="note">💡 小技巧：YouTube 會定期更換 Cookie，讓匯出的檔案失效。最穩的做法是開<b>無痕 / 私密視窗</b>登入 YouTube 後匯出，然後<b>直接關閉</b>那個視窗（擴充功能需允許在無痕模式執行）。</div></li>
+        <li><b>把檔案拖進來</b>
+          <div class="drop" id="cookieDrop">📄 拖曳 cookies.txt 到這裡，或<u>點此選擇檔案</u><input type="file" id="cookieFile" accept=".txt,text/plain" hidden></div>
+          <details style="margin-top:10px"><summary style="cursor:pointer;font-size:12.5px;color:var(--muted)">或直接貼上檔案內容</summary>
+            <textarea class="input mono" id="cookiePaste" rows="4" style="margin-top:8px" placeholder="# Netscape HTTP Cookie File&#10;.youtube.com	TRUE	/	TRUE	..."></textarea>
+            <button class="btn sm" id="cookiePasteBtn" style="margin-top:8px">上傳貼上的內容</button>
+          </details>
+          <div class="row" style="margin-top:10px;justify-content:flex-start;gap:8px">
+            <span class="tag" id="cookieStatus" style="flex:none">尚未上傳</span>
+            <button class="btn sm ghost danger hidden" id="cookieDel" style="flex:none">刪除檔案</button>
+          </div></li>
+      </ol>
+    </div>
+
+    <div class="auth-result hidden" id="authResult"></div>
+    <div class="row" style="margin-top:16px;justify-content:flex-end;gap:8px">
+      <button class="btn ghost danger" id="authOff" style="flex:none">停用登入</button>
+      <button class="btn" id="authDone" style="flex:none">完成</button>
+    </div>
+    <!-- 實際送給引擎的設定（由精靈填入） -->
+    <input type="checkbox" id="useCookieFile" hidden>
+    <select id="cookiesBrowser" hidden><option value=""></option><option value="chrome"></option><option value="edge"></option><option value="firefox"></option><option value="brave"></option><option value="opera"></option><option value="vivaldi"></option><option value="chromium"></option><option value="safari"></option></select>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtBytes = b => { if (!b && b !== 0) return "—"; const u = ["B","KB","MB","GB","TB"]; let i = 0; while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; } return `${b.toFixed(b < 10 && i ? 1 : 0)} ${u[i]}`; };
+const fmtDur = s => { if (s == null) return "—"; s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0"); };
+const fmtNum = n => n == null ? "—" : n >= 1e8 ? (n / 1e8).toFixed(1) + " 億" : n >= 1e4 ? (n / 1e4).toFixed(1) + " 萬" : n.toLocaleString();
+const fmtDate = d => d ? `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}` : "—";
+
+function toast(msg, type = "") {
+  const t = document.createElement("div");
+  t.className = "toast " + type; t.textContent = msg;
+  $("#toasts").appendChild(t);
+  setTimeout(() => { t.style.opacity = "0"; t.style.transition = "opacity .4s"; setTimeout(() => t.remove(), 400); }, 4200);
+}
+
+/* 後端位址：由引擎本身提供頁面時用同源；從 GitHub Pages / 檔案開啟時預設連本機 8765。可用 ?api= 或設定覆寫 */
+const normBase = v => String(v || "").trim().replace(/\/+$/, "");
+let API_BASE = (() => {
+  let saved = null; try { saved = localStorage.getItem("ytdl-api"); } catch {}
+  const q = new URLSearchParams(location.search).get("api");
+  if (q || saved) return normBase(q || saved);
+  const servedByEngine = /^https?:$/.test(location.protocol) && !location.hostname.endsWith("github.io");
+  return servedByEngine ? "" : "http://127.0.0.1:8765";
+})();
+
+async function api(path, opts = {}) {
+  const res = await fetch(API_BASE + path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+/* ---------------- Effects: spotlight + click spark ---------------- */
+document.addEventListener("pointermove", e => {
+  const card = e.target.closest?.(".card");
+  if (!card) return;
+  const r = card.getBoundingClientRect();
+  card.style.setProperty("--mx", `${e.clientX - r.left}px`);
+  card.style.setProperty("--my", `${e.clientY - r.top}px`);
+});
+
+(function sparks() {
+  const cv = $("#sparks"), ctx = cv.getContext("2d");
+  let parts = [], raf = null;
+  const resize = () => { const d = devicePixelRatio || 1; cv.width = innerWidth * d; cv.height = innerHeight * d; ctx.setTransform(d, 0, 0, d, 0, 0); };
+  resize(); addEventListener("resize", resize);
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  document.addEventListener("click", e => {
+    if (!e.target.closest(".btn,.chip,.tabs button")) return;
+    const now = performance.now();
+    for (let i = 0; i < 8; i++) parts.push({ x: e.clientX, y: e.clientY, a: (Math.PI * 2 * i) / 8, t: now });
+    if (!raf) raf = requestAnimationFrame(draw);
+  });
+  function draw(now) {
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    parts = parts.filter(p => now - p.t < 420);
+    for (const p of parts) {
+      const k = (now - p.t) / 420, ease = k * (2 - k), dist = ease * 26, len = 10 * (1 - ease);
+      const x1 = p.x + dist * Math.cos(p.a), y1 = p.y + dist * Math.sin(p.a);
+      ctx.strokeStyle = `rgba(196,181,253,${1 - k})`; ctx.lineWidth = 2; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 + len * Math.cos(p.a), y1 + len * Math.sin(p.a)); ctx.stroke();
+    }
+    raf = parts.length ? requestAnimationFrame(draw) : (ctx.clearRect(0, 0, innerWidth, innerHeight), null);
+  }
+})();
+
+/* ---------------- Tabs with sliding indicator ---------------- */
+function initTabs(el, onChange) {
+  const ind = $(".ind", el);
+  const move = () => { const on = $("button.on", el); if (!on) return; ind.style.left = on.offsetLeft + "px"; ind.style.width = on.offsetWidth + "px"; };
+  el.addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    $$("button", el).forEach(x => x.classList.toggle("on", x === b));
+    move(); onChange?.(b);
+  });
+  new ResizeObserver(move).observe(el);
+  return { move, set(val, attr) { const b = $(`button[data-${attr}="${val}"]`, el); if (b) { $$("button", el).forEach(x => x.classList.toggle("on", x === b)); move(); } } };
+}
+
+/* single-select chip groups */
+function chipGroup(name) { return $(`.chips[data-group="${name}"]`); }
+function groupVal(name) { return $(".chip.on", chipGroup(name))?.dataset.v ?? ""; }
+function setGroup(name, v) { $$(".chip", chipGroup(name)).forEach(c => c.classList.toggle("on", c.dataset.v === v)); }
+document.addEventListener("click", e => {
+  const c = e.target.closest(".chips[data-group] .chip"); if (!c) return;
+  $$(".chip", c.parentElement).forEach(x => x.classList.toggle("on", x === c));
+  onOptionChange();
+});
+
+/* ---------------- State ---------------- */
+const S = { info: null, mode: "av", maxHeight: "", tracks: new Set(), subs: new Set(), autos: new Set(),
+            fmtVideo: null, fmtAudio: [], fmtFilter: "all", sort: { k: "kind", dir: 1 }, plSel: new Set() };
+
+const modeTabs = initTabs($("#modeTabs"), b => { S.mode = b.dataset.mode; applyMode(); onOptionChange(); });
+const fmtTabs = initTabs($("#fmtTabs"), b => { S.fmtFilter = b.dataset.k; renderFormats(); });
+
+const SB = { sponsor: "贊助", intro: "片頭", outro: "片尾", selfpromo: "自我宣傳", preview: "預告/回顧", filler: "離題閒聊", interaction: "訂閱提醒", music_offtopic: "非音樂片段", poi_highlight: "精華", chapter: "章節" };
+for (const id of ["sbRemove", "sbMark"]) {
+  $("#" + id).innerHTML = Object.entries(SB).filter(([k]) => id === "sbMark" || !["poi_highlight", "chapter"].includes(k))
+    .map(([k, v]) => `<span class="chip" data-sb="${k}">${v}</span>`).join("");
+  $("#" + id).addEventListener("click", e => { const c = e.target.closest(".chip"); if (c) { c.classList.toggle("on"); onOptionChange(); } });
+}
+
+/* ---------------- Analyze ---------------- */
+$("#pasteBtn").addEventListener("click", async () => {
+  try { $("#url").value = (await navigator.clipboard.readText()).trim(); $("#url").focus(); }
+  catch { toast("無法讀取剪貼簿，請手動貼上", "err"); }
+});
+$("#url").addEventListener("paste", () => setTimeout(() => { if (/^https?:\/\//.test($("#url").value.trim())) $("#urlForm").requestSubmit(); }, 30));
+
+$("#urlForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const url = $("#url").value.trim(); if (!url) return;
+  const btn = $("#analyzeBtn"); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>解析中';
+  $("#result").classList.add("hidden"); $("#skeleton").classList.remove("hidden");
+  try {
+    const info = await api("/api/info", { method: "POST", body: JSON.stringify({ url, noplaylist: !$("#asPlaylist").checked, network: networkOpts() }) });
+    S.info = info; renderInfo();
+  } catch (err) { toast("解析失敗：" + err.message, "err"); }
+  finally {
+    btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5" stroke-linecap="round"/></svg>解析';
+    $("#skeleton").classList.add("hidden");
+  }
+});
+
+function renderInfo() {
+  const i = S.info;
+  S.fmtVideo = null; S.fmtAudio = []; S.tracks = new Set(); S.subs = new Set(); S.autos = new Set(); S.plSel = new Set();
+  $("#result").classList.remove("hidden");
+  $$("#result .reveal").forEach(el => { el.classList.remove("reveal"); void el.offsetWidth; el.classList.add("reveal"); });
+  const isPl = i.type === "playlist";
+  $("#playlistCard").classList.toggle("hidden", !isPl);
+  $("#fmtDetails").classList.toggle("hidden", isPl);
+
+  if (isPl) {
+    $("#previewCard").innerHTML = `<div class="vtitle">${esc(i.title)}</div>
+      <div class="meta"><span class="tag hl">播放清單</span><span class="tag">${i.entries.length} 部影片</span>${i.uploader ? `<span class="tag">${esc(i.uploader)}</span>` : ""}</div>`;
+    i.entries.forEach(e => S.plSel.add(e.index));
+    renderPlaylist();
+  } else {
+    const embed = i.extractor === "Youtube" && i.id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(i.id)}?autoplay=1` : null;
+    $("#previewCard").innerHTML = `<div class="preview">
+      <div class="thumb" id="thumbBox">${i.thumbnail ? `<img src="${esc(i.thumbnail)}" alt="" referrerpolicy="no-referrer">` : ""}
+        ${embed ? `<button class="play" id="playBtn" aria-label="預覽播放"><span><svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></span></button>` : ""}
+        <span class="dur">${i.is_live ? "LIVE" : fmtDur(i.duration)}</span></div>
+      <div>
+        <div class="vtitle">${esc(i.title)}</div>
+        <div class="meta">
+          ${i.uploader ? `<span class="tag hl">${esc(i.uploader)}</span>` : ""}
+          <span class="tag">${esc(i.extractor || "")}</span>
+          ${i.heights[0] ? `<span class="tag">最高 ${i.heights[0]}p</span>` : ""}
+          ${i.audio_tracks.length > 1 ? `<span class="tag hl">${i.audio_tracks.length} 條音軌</span>` : ""}
+          ${i.subtitles.length ? `<span class="tag">${i.subtitles.length} 種字幕</span>` : ""}
+          ${i.chapters.length ? `<span class="tag">${i.chapters.length} 個章節</span>` : ""}
+        </div>
+        <p class="vdesc">${esc(i.description || "（無說明）")}</p>
+        <div class="stats">
+          <div class="stat"><b>${fmtNum(i.view_count)}</b><span>觀看次數</span></div>
+          <div class="stat"><b>${fmtNum(i.like_count)}</b><span>喜歡</span></div>
+          <div class="stat"><b>${fmtDate(i.upload_date)}</b><span>上傳日期</span></div>
+          <div class="stat"><b>${i.formats.length}</b><span>可用格式</span></div>
+        </div>
+      </div></div>`;
+    $("#playBtn")?.addEventListener("click", () => {
+      $("#thumbBox").innerHTML = `<iframe src="${esc(embed)}" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+    });
+  }
+  renderQuality(); renderTracks(); renderSubs(); renderFormats(); renderChapters(); renderPresets();
+  applyMode(); onOptionChange();
+  setTimeout(() => $("#previewCard").scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+}
+
+function renderPlaylist() {
+  $("#plist").innerHTML = S.info.entries.map(e => `<div class="pitem ${S.plSel.has(e.index) ? "on" : ""}" data-i="${e.index}">
+    <span class="n">${e.index}</span>${e.thumbnail ? `<img src="${esc(e.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}
+    <div class="tt">${esc(e.title || e.id)}<small>${fmtDur(e.duration)}${e.uploader ? " · " + esc(e.uploader) : ""}</small></div></div>`).join("");
+}
+$("#plist").addEventListener("click", e => {
+  const it = e.target.closest(".pitem"); if (!it) return;
+  const i = +it.dataset.i; S.plSel.has(i) ? S.plSel.delete(i) : S.plSel.add(i);
+  it.classList.toggle("on"); $("#plRange").value = ""; onOptionChange();
+});
+$("#plAll").addEventListener("click", () => { S.info.entries.forEach(e => S.plSel.add(e.index)); $("#plRange").value = ""; renderPlaylist(); onOptionChange(); });
+$("#plNone").addEventListener("click", () => { S.plSel.clear(); $("#plRange").value = ""; renderPlaylist(); onOptionChange(); });
+$("#plRange").addEventListener("input", onOptionChange);
+
+const QLABEL = { 4320: "8K", 2160: "4K", 1440: "2K", 1080: "FHD", 720: "HD" };
+function renderQuality() {
+  const hs = S.info?.heights?.length ? S.info.heights : [2160, 1440, 1080, 720, 480, 360, 240, 144];
+  if (S.maxHeight && !hs.includes(+S.maxHeight)) S.maxHeight = "";
+  $("#qualityChips").innerHTML = `<span class="chip ${S.maxHeight === "" ? "on" : ""}" data-h="">最佳</span>` +
+    hs.map(h => `<span class="chip ${String(h) === S.maxHeight ? "on" : ""}" data-h="${h}">${h}p${QLABEL[h] ? ` <small>${QLABEL[h]}</small>` : ""}</span>`).join("");
+  $("#qHint").textContent = S.info?.heights?.length ? `此影片可用 ${hs.length} 種` : "";
+}
+$("#qualityChips").addEventListener("click", e => {
+  const c = e.target.closest(".chip"); if (!c) return;
+  S.maxHeight = c.dataset.h; $$(".chip", $("#qualityChips")).forEach(x => x.classList.toggle("on", x === c)); onOptionChange();
+});
+
+function renderTracks() {
+  const tr = S.info?.audio_tracks || [];
+  if (tr.length < 2) {
+    $("#trackChips").innerHTML = `<span class="chip on" style="cursor:default">預設音軌${tr[0] ? ` <small>${esc(tr[0].lang)}</small>` : ""}</span><span style="font-size:12px;color:var(--dim);align-self:center">此影片只有一條音軌</span>`;
+    return;
+  }
+  $("#trackChips").innerHTML = tr.map(t => `<span class="chip ${S.tracks.has(t.lang) ? "on" : ""}" data-l="${esc(t.lang)}">${esc(t.label)} <small>${esc(t.lang)}</small>${t.original ? '<span class="badge-s">原音</span>' : ""}</span>`).join("") +
+    `<span class="chip" data-l="*all">全部 ${tr.length} 條</span>`;
+}
+$("#trackChips").addEventListener("click", e => {
+  const c = e.target.closest(".chip[data-l]"); if (!c) return;
+  const tr = S.info.audio_tracks;
+  if (c.dataset.l === "*all") { const all = S.tracks.size === tr.length; S.tracks = new Set(all ? [] : tr.map(t => t.lang)); }
+  else S.tracks.has(c.dataset.l) ? S.tracks.delete(c.dataset.l) : S.tracks.add(c.dataset.l);
+  renderTracks(); onOptionChange();
+});
+
+function renderSubs() {
+  const subs = S.info?.subtitles || [], autos = S.info?.auto_captions || [];
+  $("#subCount").textContent = subs.length ? `${subs.length} 種` : "";
+  $("#autoCount").textContent = autos.length ? `${autos.length} 種` : "";
+  $("#subChips").innerHTML = subs.length ? subs.map(s => `<span class="chip ${S.subs.has(s.lang) ? "on" : ""}" data-l="${esc(s.lang)}">${esc(s.name)} <small>${esc(s.lang)}</small></span>`).join("")
+    : `<span style="font-size:12.5px;color:var(--dim)">此影片沒有上傳者字幕</span>`;
+  renderAutos();
+}
+function renderAutos() {
+  const q = $("#autoSearch").value.trim().toLowerCase();
+  let autos = S.info?.auto_captions || [];
+  // 原文自動字幕（無 "-" 翻譯後綴或 -orig）排最前
+  autos = [...autos].sort((a, b) => (S.autos.has(b.lang) - S.autos.has(a.lang)) || (/-orig$/.test(b.lang) - /-orig$/.test(a.lang)));
+  const list = q ? autos.filter(s => (s.name + " " + s.lang).toLowerCase().includes(q)) : autos.slice(0, 40);
+  $("#autoChips").innerHTML = list.length ? list.map(s => `<span class="chip ${S.autos.has(s.lang) ? "on" : ""}" data-l="${esc(s.lang)}">${esc(s.name)} <small>${esc(s.lang)}</small></span>`).join("") +
+    (!q && autos.length > 40 ? `<span style="font-size:12px;color:var(--dim);align-self:center">…還有 ${autos.length - 40} 種，請搜尋</span>` : "")
+    : `<span style="font-size:12.5px;color:var(--dim)">${autos.length ? "找不到符合的語言" : "此影片沒有自動字幕"}</span>`;
+}
+$("#autoSearch").addEventListener("input", renderAutos);
+$("#subChips").addEventListener("click", e => { const c = e.target.closest(".chip[data-l]"); if (!c) return; const l = c.dataset.l; S.subs.has(l) ? S.subs.delete(l) : S.subs.add(l); c.classList.toggle("on"); onOptionChange(); });
+$("#autoChips").addEventListener("click", e => { const c = e.target.closest(".chip[data-l]"); if (!c) return; const l = c.dataset.l; S.autos.has(l) ? S.autos.delete(l) : S.autos.add(l); c.classList.toggle("on"); onOptionChange(); });
+function quickPick(re) {
+  const subs = S.info?.subtitles || [], autos = S.info?.auto_captions || [];
+  const hit = subs.filter(s => re.test(s.lang));
+  if (hit.length) hit.forEach(s => S.subs.add(s.lang));
+  else { const a = autos.filter(s => re.test(s.lang)); a.forEach(s => S.autos.add(s.lang)); if (!a.length) toast("找不到符合的字幕語言"); }
+  renderSubs(); onOptionChange();
+}
+$("#subPickZh").addEventListener("click", () => quickPick(/^zh(-Hant|-TW|-HK|-Hans|-CN)?$/i));
+$("#subPickEn").addEventListener("click", () => quickPick(/^en(-[A-Z]{2})?$|^en-orig$/));
+$("#subClear").addEventListener("click", () => { S.subs.clear(); S.autos.clear(); renderSubs(); onOptionChange(); });
+
+function renderChapters() {
+  const ch = S.info?.chapters || [];
+  $("#chapterChips").innerHTML = ch.slice(0, 30).map((c, i) => `<span class="chip" data-c="${i}" title="${esc(c.title)}">${fmtDur(c.start)} ${esc((c.title || "").slice(0, 18))}</span>`).join("");
+}
+$("#chapterChips").addEventListener("click", e => {
+  const c = e.target.closest(".chip[data-c]"); if (!c) return;
+  const ch = S.info.chapters[+c.dataset.c];
+  const seg = `${fmtDur(ch.start)}-${fmtDur(ch.end)}`;
+  const cur = $("#sections").value.trim();
+  $("#sections").value = cur ? cur + ", " + seg : seg; onOptionChange();
+});
+
+/* ---------------- Format table ---------------- */
+function renderFormats() {
+  const fs = (S.info?.formats || []).filter(f => S.fmtFilter === "all" || f.kind === S.fmtFilter);
+  const { k, dir } = S.sort;
+  const ord = { av: 0, video: 1, audio: 2 };
+  fs.sort((a, b) => {
+    let x = a[k], y = b[k];
+    if (k === "kind") { x = ord[x]; y = ord[y]; if (x === y) return (b.height || 0) - (a.height || 0) || (b.tbr || 0) - (a.tbr || 0); }
+    if (x == null) return 1; if (y == null) return -1;
+    return (x > y ? 1 : x < y ? -1 : 0) * dir;
+  });
+  const KN = { av: "影音", video: "影片", audio: "音訊" };
+  $("#fmtTable tbody").innerHTML = fs.map(f => {
+    const sel = f.id === S.fmtVideo || S.fmtAudio.includes(f.id);
+    return `<tr class="${sel ? "sel" : ""}" data-id="${esc(f.id)}" data-kind="${f.kind}">
+      <td><span class="selbox"></span></td><td class="mono">${esc(f.id)}</td><td class="k-${f.kind}">${KN[f.kind]}</td><td class="mono">${esc(f.ext)}</td>
+      <td class="mono">${f.height ? `${f.width || "?"}×${f.height}` : "—"}</td><td class="mono">${f.fps ?? "—"}</td>
+      <td class="mono">${esc((f.vcodec || "—").split(".")[0])}${f.dynamic_range && f.dynamic_range !== "SDR" ? ` <span class="ext">${esc(f.dynamic_range)}</span>` : ""}</td>
+      <td class="mono">${esc((f.acodec || "—").split(".")[0])}${f.channels ? ` ${f.channels}ch` : ""}</td>
+      <td class="mono">${f.tbr ? Math.round(f.tbr) + "k" : "—"}</td><td class="mono">${f.asr ? (f.asr / 1000).toFixed(1) + "k" : "—"}</td>
+      <td>${esc(f.language || "—")}</td><td class="mono">${f.filesize ? (f.approx ? "≈" : "") + fmtBytes(f.filesize) : "—"}</td>
+      <td style="color:var(--dim)">${/premium/i.test(f.note || "") ? '<span class="badge-s" style="background:rgba(251,191,36,.15);color:var(--warn)">Premium</span> ' : ""}${esc(f.note || "")}${f.protocol && f.protocol !== "https" ? ` · ${esc(f.protocol)}` : ""}</td></tr>`;
+  }).join("") || `<tr><td colspan="13" class="empty">沒有格式</td></tr>`;
+  const parts = [];
+  if (S.fmtVideo) parts.push("影片 " + S.fmtVideo);
+  if (S.fmtAudio.length) parts.push("音訊 " + S.fmtAudio.join(" + "));
+  $("#fmtSel").textContent = parts.length ? "— 已選 " + parts.join("、") : "";
+}
+$("#fmtTable thead").addEventListener("click", e => {
+  const th = e.target.closest("th[data-s]"); if (!th) return;
+  const k = th.dataset.s; S.sort = { k, dir: S.sort.k === k ? -S.sort.dir : (["height", "fps", "tbr", "asr", "filesize"].includes(k) ? -1 : 1) };
+  renderFormats();
+});
+$("#fmtTable tbody").addEventListener("click", e => {
+  const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+  const id = tr.dataset.id, kind = tr.dataset.kind;
+  if (kind === "audio") {
+    S.fmtAudio = S.fmtAudio.includes(id) ? S.fmtAudio.filter(x => x !== id) : [...S.fmtAudio, id];
+  } else {
+    S.fmtVideo = S.fmtVideo === id ? null : id;
+    if (kind === "av" && S.fmtVideo) S.fmtAudio = [];
+  }
+  renderFormats(); onOptionChange();
+});
+$("#fmtClear").addEventListener("click", () => { S.fmtVideo = null; S.fmtAudio = []; renderFormats(); onOptionChange(); });
+
+/* ---------------- Mode visibility ---------------- */
+function applyMode() {
+  const m = S.mode;
+  const show = (el, on) => el.classList.toggle("hidden", !on);
+  show($("#videoCard"), m === "av" || m === "video");
+  show($("#audioCard"), m === "av" || m === "audio");
+  show($("#audioCodecField"), m === "audio");
+  show($("#audioQField"), m === "audio");
+  show($("#aPreferField"), m === "av");
+  show($("#subsCard"), m !== "thumb");
+  $("#subEmbed").closest(".sw").classList.toggle("hidden", !(m === "av" || m === "video"));
+  $("#subKeep").closest(".sw").classList.toggle("hidden", !(m === "av" || m === "video"));
+  $(".grid.g2.section").style.gridTemplateColumns = (m === "av") ? "" : "1fr";
+  modeTabs.move();
+}
+
+/* ---------------- Build options ---------------- */
+function networkOpts() {
+  return { proxy: $("#proxy").value.trim(), cookies_browser: $("#cookiesBrowser").value, geo_country: $("#geo").value.trim(),
+           cookies_file: $("#useCookieFile").checked };
+}
+function sbList(id) { return $$(`#${id} .chip.on`).map(c => c.dataset.sb); }
+
+function playlistItems() {
+  if (S.info?.type !== "playlist") return "";
+  const typed = $("#plRange").value.trim();
+  if (typed) return typed;
+  return S.plSel.size !== S.info.entries.length ? [...S.plSel].sort((a, b) => a - b).join(",") : "";
+}
+
+function buildOptions() {
+  const isPl = S.info?.type === "playlist";
+  const items = playlistItems();
+  return {
+    mode: S.mode,
+    playlist: isPl,
+    playlist_items: items,
+    video: {
+      max_height: S.maxHeight, codec: groupVal("codec"), container: $("#container").value, max_fps: $("#maxFps").value,
+      hdr: groupVal("hdr"), recode: $("#recode").checked, prefer_size: $("#preferSize").checked, premium: $("#premium").checked,
+      format_id: isPl ? "" : (S.fmtVideo || ""),
+    },
+    audio: {
+      languages: [...S.tracks], format_ids: isPl ? [] : S.fmtAudio, codec: groupVal("acodec"), quality: $("#aquality").value,
+      prefer_codec: groupVal("aprefer"), allow_drc: $("#allowDrc").checked,
+    },
+    subs: {
+      languages: [...S.subs], auto_languages: [...S.autos], format: groupVal("subfmt"),
+      embed: $("#subEmbed").checked, keep_files: $("#subKeep").checked, all: $("#subAll").checked,
+    },
+    extras: {
+      embed_metadata: $("#embedMeta").checked, embed_chapters: $("#embedChapters").checked,
+      embed_thumbnail: $("#embedThumb").checked, write_thumbnail: $("#writeThumb").checked, thumb_format: groupVal("thumbfmt"),
+      sections: $("#sections").value.trim(), split_chapters: $("#splitChapters").checked, force_keyframes: $("#forceKf").checked,
+      live_from_start: $("#liveStart").checked,
+      sponsor_remove: sbList("sbRemove"), sponsor_mark: sbList("sbMark"),
+      write_description: $("#writeDesc").checked, write_infojson: $("#writeInfo").checked, write_comments: $("#writeComments").checked,
+      keep_original: $("#keepOrig").checked,
+      template: $("#template").value, restrict_filenames: $("#restrictNames").checked,
+      rate_limit: $("#rateLimit").value.trim(), fragments: +$("#fragments").value, retries: +$("#retries").value,
+    },
+    network: networkOpts(),
+  };
+}
+
+function onOptionChange() {
+  if (!S.info) return;
+  const o = buildOptions();
+  const MN = { av: "影片＋音訊", video: "僅影片", audio: "僅音訊", subs: "僅字幕", thumb: "僅縮圖" };
+  const p = [`<b>${MN[o.mode]}</b>`];
+  if (o.mode === "av" || o.mode === "video") {
+    if (o.video.format_id) p.push(`格式 ${o.video.format_id}${o.audio.format_ids.length ? "+" + o.audio.format_ids.join("+") : ""}`);
+    else p.push(o.video.max_height ? `≤${o.video.max_height}p` : "最佳畫質");
+    if (o.video.codec) p.push(o.video.codec.toUpperCase());
+    p.push((o.video.container || "自動").toUpperCase());
+  }
+  if (o.mode === "audio") {
+    if (o.audio.format_ids.length) p.push(`格式 ${o.audio.format_ids.join(", ")}`);
+    p.push(o.audio.codec === "best" ? "原始格式" : o.audio.codec.toUpperCase());
+  }
+  if ((o.mode === "av" || o.mode === "audio") && o.audio.languages.length) p.push(`${o.audio.languages.length} 條音軌`);
+  const ns = o.subs.all ? "全部" : o.subs.languages.length + o.subs.auto_languages.length;
+  if (ns && o.mode !== "thumb") p.push(`字幕 ${ns}`);
+  if (o.extras.sections) p.push("剪輯片段");
+  if (o.playlist) p.push(`清單 ${o.playlist_items ? o.playlist_items.split(",").length + " 項" : "全部"}`);
+  $("#summary").innerHTML = p.join(" · ");
+  savePrefs();
+}
+
+/* ---------------- Preferences (localStorage, best-effort) ---------------- */
+const PREF_IDS = ["container", "maxFps", "recode", "preferSize", "premium", "useCookieFile", "aquality", "allowDrc", "subEmbed", "subKeep", "embedMeta", "embedChapters", "embedThumb",
+  "writeThumb", "splitChapters", "forceKf", "writeDesc", "writeInfo", "keepOrig", "template", "restrictNames", "cookiesBrowser", "proxy", "rateLimit", "geo", "fragments", "retries"];
+const PREF_GROUPS = ["codec", "hdr", "acodec", "aprefer", "subfmt", "thumbfmt"];
+function savePrefs() {
+  const p = { mode: S.mode, maxHeight: S.maxHeight, groups: {}, ids: {}, sbR: sbList("sbRemove"), sbM: sbList("sbMark") };
+  PREF_GROUPS.forEach(g => p.groups[g] = groupVal(g));
+  PREF_IDS.forEach(id => { const el = $("#" + id); p.ids[id] = el.type === "checkbox" ? el.checked : el.value; });
+  try { localStorage.setItem("ytdl-prefs", JSON.stringify(p)); } catch {}
+}
+function loadPrefs() {
+  let p; try { p = JSON.parse(localStorage.getItem("ytdl-prefs") || "null"); } catch { p = null; }
+  if (!p) return;
+  if (p.mode) { S.mode = p.mode; modeTabs.set(p.mode, "mode"); }
+  S.maxHeight = p.maxHeight || "";
+  Object.entries(p.groups || {}).forEach(([g, v]) => setGroup(g, v));
+  Object.entries(p.ids || {}).forEach(([id, v]) => { const el = $("#" + id); if (!el) return; el.type === "checkbox" ? (el.checked = !!v) : (el.value = v); });
+  $$("#sbRemove .chip").forEach(c => c.classList.toggle("on", (p.sbR || []).includes(c.dataset.sb)));
+  $$("#sbMark .chip").forEach(c => c.classList.toggle("on", (p.sbM || []).includes(c.dataset.sb)));
+  $("#fragV").textContent = $("#fragments").value;
+  syncTplPreset();
+}
+function syncTplPreset() {
+  const v = $("#template").value;
+  $("#tplPreset").value = [...$("#tplPreset").options].some(o => o.value === v) ? v : "custom";
+}
+$("#resetBtn").addEventListener("click", () => { try { localStorage.removeItem("ytdl-prefs"); } catch {} location.reload(); });
+
+$("#tplPreset").addEventListener("change", e => { if (e.target.value !== "custom") $("#template").value = e.target.value; else $("#template").focus(); onOptionChange(); });
+$("#template").addEventListener("input", () => { syncTplPreset(); onOptionChange(); });
+$("#fragments").addEventListener("input", e => { $("#fragV").textContent = e.target.value; });
+$("#aquality").addEventListener("change", e => { $("#aqLabel").textContent = e.target.selectedOptions[0].textContent; });
+$$("#result input, #result select").forEach(el => el.addEventListener("change", onOptionChange));
+$("#sections").addEventListener("input", onOptionChange);
+
+/* ---------------- Download & jobs ---------------- */
+$("#downloadBtn").addEventListener("click", async () => {
+  if (!S.info) return;
+  const o = buildOptions();
+  if (o.mode === "subs" && !o.subs.all && !o.subs.languages.length && !o.subs.auto_languages.length) { toast("請至少選擇一種字幕語言", "err"); return; }
+  if (o.playlist && !o.playlist_items && !S.plSel.size) { toast("請至少選擇一部影片", "err"); return; }
+  const btn = $("#downloadBtn"); btn.disabled = true;
+  await startDownload(o);
+  btn.disabled = false;
+});
+
+async function startDownload(o) {
+  try {
+    await api("/api/download", { method: "POST", body: JSON.stringify({ url: S.info.webpage_url, title: S.info.title, options: o }) });
+    toast("已加入下載佇列", "ok");
+    refreshJobs();
+    setTimeout(() => $("#jobs").scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+    return true;
+  } catch (err) { toast("無法開始下載：" + err.message, "err"); return false; }
+}
+
+const openLogs = new Set();
+let jobsTimer = null, lastJobsSig = "";
+async function refreshJobs() {
+  clearTimeout(jobsTimer);
+  let jobs = [];
+  try { jobs = await api("/api/jobs"); } catch { jobsTimer = setTimeout(refreshJobs, 3000); return; }
+  const active = jobs.some(j => ["queued", "downloading", "processing"].includes(j.status));
+  const logs = {};
+  await Promise.all([...openLogs].filter(id => jobs.some(j => j.id === id)).map(async id => { try { logs[id] = (await api(`/api/jobs/${id}`)).log; } catch {} }));
+  const sig = JSON.stringify([jobs, logs]);
+  if (sig !== lastJobsSig) { lastJobsSig = sig; renderJobs(jobs, logs); }
+  jobsTimer = setTimeout(refreshJobs, active ? 700 : 4000);
+}
+const ST = { queued: "排隊中", downloading: "下載中", processing: "處理中", done: "完成", error: "失敗", cancelled: "已取消" };
+function renderJobs(jobs, logs) {
+  const box = $("#jobs");
+  if (!jobs.length) { box.innerHTML = '<div class="empty">尚無下載工作</div>'; return; }
+  const scrolls = {}; $$("pre.log", box).forEach(p => scrolls[p.dataset.id] = p.scrollHeight - p.scrollTop - p.clientHeight < 8);
+  box.innerHTML = jobs.map(j => {
+    const running = ["queued", "downloading", "processing"].includes(j.status);
+    const indet = running && (j.status === "processing" || j.status === "queued" || !j.progress);
+    const files = j.files || [];
+    return `<div class="job" data-id="${j.id}">
+      <div class="job-top">
+        <span class="job-title" title="${esc(j.title)}">${esc(j.title)}</span>
+        <span class="status ${j.status}">${ST[j.status] || j.status}</span>
+        ${running ? `<button class="btn sm danger" data-act="cancel">取消</button>` : `<button class="btn sm ghost danger" data-act="delete" title="刪除工作與檔案">刪除</button>`}
+      </div>
+      ${running ? `<div class="bar ${indet ? "indet" : ""}"><i style="width:${j.progress || 0}%"></i></div>
+        <div class="job-sub"><span>${esc(j.stage)}</span>${j.item ? `<span>項目 ${esc(j.item)}</span>` : ""}${j.progress ? `<span>${j.progress.toFixed(1)}%</span>` : ""}
+        ${j.total ? `<span>${fmtBytes(j.downloaded)} / ${fmtBytes(j.total)}</span>` : ""}${j.speed ? `<span>${fmtBytes(j.speed)}/s</span>` : ""}${j.eta != null ? `<span>剩 ${fmtDur(j.eta)}</span>` : ""}</div>` : ""}
+      ${j.error ? `<div class="err-box">${esc(j.error)}</div>` : ""}
+      ${files.length ? `<div class="files">${files.map(f => {
+        const ext = (f.name.split(".").pop() || "").slice(0, 6);
+        return `<div class="file"><span class="ext">${esc(ext)}</span><span class="fn" title="${esc(f.name)}">${esc(f.name)}</span><span class="fs">${fmtBytes(f.size)}</span>
+          <a class="btn sm" href="${API_BASE}/api/jobs/${j.id}/file/${f.name.split("/").map(encodeURIComponent).join("/")}" download>下載</a></div>`;
+      }).join("")}${files.length > 1 ? `<div><a class="btn sm" href="${API_BASE}/api/jobs/${j.id}/zip">全部打包 ZIP</a></div>` : ""}</div>` : ""}
+      <div style="margin-top:10px"><button class="btn sm ghost" data-act="log">${openLogs.has(j.id) ? "隱藏紀錄" : "顯示紀錄"}</button></div>
+      ${openLogs.has(j.id) ? `<pre class="log" data-id="${j.id}">${esc((logs[j.id] || []).join("\n") || "（尚無紀錄）")}</pre>` : ""}
+    </div>`;
+  }).join("");
+  $$("pre.log", box).forEach(p => { if (scrolls[p.dataset.id] !== false) p.scrollTop = p.scrollHeight; });
+}
+$("#jobs").addEventListener("click", async e => {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const id = b.closest(".job").dataset.id, act = b.dataset.act;
+  try {
+    if (act === "cancel") await api(`/api/jobs/${id}/cancel`, { method: "POST" });
+    if (act === "delete") await api(`/api/jobs/${id}`, { method: "DELETE" });
+    if (act === "log") openLogs.has(id) ? openLogs.delete(id) : openLogs.add(id);
+  } catch (err) { toast(err.message, "err"); }
+  lastJobsSig = ""; refreshJobs();
+});
+$("#clearDone").addEventListener("click", async () => {
+  const jobs = await api("/api/jobs").catch(() => []);
+  await Promise.all(jobs.filter(j => ["done", "error", "cancelled"].includes(j.status)).map(j => api(`/api/jobs/${j.id}`, { method: "DELETE" }).catch(() => {})));
+  lastJobsSig = ""; refreshJobs();
+});
+
+/* ---------------- Boot ---------------- */
+renderQuality();
+applyMode();
+const vt = v => (String(v || "").match(/\d+/g) || []).map(Number);
+const newer = (a, b) => { const x = vt(a), y = vt(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+
+let metaTimer = null;
+async function loadMeta() {
+  clearTimeout(metaTimer);
+  try {
+    const m = await api("/api/meta");
+    $("#setupCard").classList.add("hidden");
+    $("#envPill").innerHTML = `<span class="dot ${m.ffmpeg ? "" : "bad"}"></span><span>yt-dlp ${esc(m.version)}${m.channel === "nightly" ? " nightly" : ""}${m.ffmpeg ? " · FFmpeg ✓" : " · 缺少 FFmpeg"}</span>`;
+    const canUpdate = m.latest && newer(m.latest, m.version);
+    $("#updateBtn").classList.toggle("hidden", !canUpdate && !m.update_running);
+    $("#updateBtn").disabled = !!m.update_running;
+    $("#updateBtn").textContent = m.update_running ? "更新中…" : `更新至 ${m.latest}`;
+    if (m.update_message && !m.update_running && /失敗/.test(m.update_message)) toast(m.update_message, "err");
+    if (m.just_updated && !sessionStorage.getItem("ytdl-updated-toast")) { toast(`yt-dlp 已自動更新至 ${m.version}`, "ok"); try { sessionStorage.setItem("ytdl-updated-toast", "1"); } catch {} }
+    if (!m.cookies_file) renderCookieFile(false, 0);
+    if (m.update_running) metaTimer = setTimeout(loadMeta, 2000);
+    return true;
+  } catch {
+    $("#envPill").innerHTML = '<span class="dot bad"></span><span>引擎未連線</span>';
+    $("#setupCard").classList.remove("hidden");
+    $("#apiBase").value = API_BASE || location.origin;
+    metaTimer = setTimeout(loadMeta, 5000);
+    return false;
+  }
+}
+
+$("#envPill").addEventListener("click", () => {
+  $("#setupCard").classList.toggle("hidden");
+  $("#apiBase").value = API_BASE || location.origin;
+});
+$("#apiConnect").addEventListener("click", async () => {
+  API_BASE = normBase($("#apiBase").value) || "";
+  try { localStorage.setItem("ytdl-api", API_BASE); } catch {}
+  if (await loadMeta()) { toast("已連線到下載引擎", "ok"); lastJobsSig = ""; refreshJobs(); }
+  else toast("連線失敗，請確認引擎已啟動、位址正確", "err");
+});
+$("#updateBtn").addEventListener("click", async () => {
+  try {
+    await api("/api/update", { method: "POST" });
+    toast("開始更新 yt-dlp，完成後引擎會自動重啟", "ok");
+    $("#updateBtn").disabled = true; $("#updateBtn").textContent = "更新中…";
+    metaTimer = setTimeout(loadMeta, 3000);
+  } catch (err) { toast(err.message, "err"); }
+});
+/* ---------------- Auth wizard（登入 / Premium 引導） ---------------- */
+const AUTH = (() => { try { return JSON.parse(localStorage.getItem("ytdl-auth") || "null") || {}; } catch { return {}; } })();
+const BROWSER_NAMES = { chrome: "Chrome", edge: "Edge", firefox: "Firefox", brave: "Brave", opera: "Opera", vivaldi: "Vivaldi", chromium: "Chromium", safari: "Safari" };
+const CHROMIUM_LOCKED = ["chrome", "edge", "brave", "opera", "vivaldi", "chromium"];
+const isWindows = /Windows/i.test(navigator.userAgent);
+function detectBrowser() {
+  const ua = navigator.userAgent;
+  if (/Edg\//.test(ua)) return "edge";
+  if (/OPR\//.test(ua)) return "opera";
+  if (/Vivaldi/.test(ua)) return "vivaldi";
+  if (navigator.brave) return "brave";
+  if (/Firefox\//.test(ua)) return "firefox";
+  if (/Chrome\//.test(ua)) return "chrome";
+  if (/Safari\//.test(ua)) return "safari";
+  return "chrome";
+}
+let authBrowser = $("#cookiesBrowser").value || detectBrowser();
+
+function saveAuth() { try { localStorage.setItem("ytdl-auth", JSON.stringify(AUTH)); } catch {} }
+function renderAuthStatus() {
+  const active = $("#useCookieFile").checked || $("#cookiesBrowser").value;
+  const st = !active ? "off" : AUTH.premium ? "premium" : AUTH.logged_in ? "on" : "unknown";
+  const label = { off: "未登入 · 點此設定", premium: "★ Premium 已登入", on: "✓ 已登入", unknown: "已設定登入 · 未驗證" }[st];
+  $$(".auth-status").forEach(t => { t.textContent = label; t.classList.toggle("auth-ok", st === "on"); t.classList.toggle("auth-gold", st === "premium"); });
+  renderPresets();
+}
+function renderBrowserChips() {
+  const det = detectBrowser();
+  const list = isWindows ? ["firefox", "chrome", "edge", "brave", "opera", "vivaldi"] : ["chrome", "firefox", "safari", "edge", "brave", "opera"];
+  $("#authBrowsers").innerHTML = list.map(b => `<span class="chip ${b === authBrowser ? "on" : ""}" data-b="${b}">${BROWSER_NAMES[b]}${b === det ? ' <span class="badge-s">目前使用</span>' : ""}${isWindows && b === "firefox" ? ' <small>Windows 最穩</small>' : ""}</span>`).join("");
+  $("#chromeNote").classList.toggle("hidden", !(isWindows && CHROMIUM_LOCKED.includes(authBrowser)));
+}
+$("#authBrowsers").addEventListener("click", e => { const c = e.target.closest(".chip[data-b]"); if (c) { authBrowser = c.dataset.b; renderBrowserChips(); } });
+
+const authTabs = initTabs($("#authTabs"), b => showAuthPane(b.dataset.m));
+function showAuthPane(m) { $("#authBrowser").classList.toggle("hidden", m !== "browser"); $("#authFile").classList.toggle("hidden", m !== "file"); }
+
+function openAuth() {
+  $("#authModal").classList.remove("hidden");
+  // Windows 的 Chrome / Edge 讀不到 Cookie，直接推薦 cookies.txt
+  const m = $("#useCookieFile").checked ? "file" : $("#cookiesBrowser").value ? "browser"
+    : (isWindows && CHROMIUM_LOCKED.includes(detectBrowser())) ? "file" : "browser";
+  authTabs.set(m, "m"); showAuthPane(m); renderBrowserChips();
+  $("#authResult").classList.add("hidden");
+  api("/api/cookies").then(c => renderCookieFile(c.exists, c.size)).catch(() => {});
+  setTimeout(() => authTabs.move(), 0);
+}
+function closeAuth() { $("#authModal").classList.add("hidden"); }
+document.addEventListener("click", e => { if (e.target.closest(".open-auth")) { e.preventDefault(); openAuth(); } });
+$("#authClose").addEventListener("click", closeAuth);
+$("#authDone").addEventListener("click", closeAuth);
+$("#authModal").addEventListener("click", e => { if (e.target.id === "authModal") closeAuth(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#authModal").classList.contains("hidden")) closeAuth(); });
+
+function showAuthResult(cls, html) { const r = $("#authResult"); r.className = "auth-result " + cls; r.innerHTML = html; }
+async function runAuthTest() {
+  showAuthResult("", '<span class="spin" style="display:inline-block;vertical-align:-3px;margin-right:8px"></span>正在用你的登入狀態連線 YouTube 驗證…');
+  try {
+    const r = await api("/api/auth/test", { method: "POST", body: JSON.stringify({ network: networkOpts() }) });
+    AUTH.logged_in = r.logged_in; AUTH.premium = r.premium; saveAuth();
+    if (r.premium) {
+      $("#premium").checked = true;
+      showAuthResult("gold", "<b>★ 偵測到 YouTube Premium！</b><br>已自動開啟「Premium 高位元率」。之後解析影片就會出現標有 Premium 的高畫質格式。");
+    } else if (r.logged_in) {
+      showAuthResult("ok", "<b>✓ 登入成功</b>（未偵測到 Premium）<br>可下載會員 / 年齡限制影片。若你確定有 Premium，請確認匯出 Cookie 的是 Premium 帳號。");
+    } else {
+      disableAuthSource();
+      showAuthResult("bad", `<b>✗ 沒有偵測到登入狀態</b><br>${r.expired ? "Cookie 已失效，請重新匯出（建議用無痕視窗匯出後立即關閉視窗）。" : "請確認該瀏覽器已登入 YouTube，或改用另一種方法。"}<br><small style="color:var(--dim)">已暫時停用登入，避免影響下載。</small>`);
+    }
+    renderAuthStatus(); onOptionChange();
+    if ((r.premium || r.logged_in) && S.info && $("#url").value.trim()) setTimeout(() => $("#urlForm").requestSubmit(), 400);
+    return r.logged_in;
+  } catch (err) {
+    AUTH.logged_in = AUTH.premium = false; saveAuth();
+    disableAuthSource();
+    showAuthResult("bad", `<b>✗ 驗證失敗</b><br>${esc(err.message)}<br><small style="color:var(--dim)">已暫時停用登入，避免影響下載。</small>`);
+    renderAuthStatus();
+    return false;
+  }
+}
+// 驗證失敗時關掉 Cookie 來源，避免後續下載因讀不到 Cookie 而全部失敗
+function disableAuthSource() { $("#useCookieFile").checked = false; $("#cookiesBrowser").value = ""; savePrefs(); }
+$("#authTestBrowser").addEventListener("click", async () => {
+  $("#cookiesBrowser").value = authBrowser; $("#useCookieFile").checked = false;
+  const btn = $("#authTestBrowser"); btn.disabled = true;
+  await runAuthTest(); btn.disabled = false;
+});
+
+function renderCookieFile(exists, size) {
+  $("#cookieStatus").textContent = exists ? `已上傳 cookies.txt · ${fmtBytes(size)}` : "尚未上傳";
+  $("#cookieStatus").classList.toggle("hl", !!exists);
+  $("#cookieDel").classList.toggle("hidden", !exists);
+  if (!exists && $("#useCookieFile").checked) { $("#useCookieFile").checked = false; renderAuthStatus(); }
+}
+async function uploadCookies(text) {
+  try {
+    const r = await api("/api/cookies", { method: "POST", body: JSON.stringify({ text }) });
+    renderCookieFile(r.exists, r.size);
+    $("#useCookieFile").checked = true; $("#cookiesBrowser").value = "";
+    await runAuthTest();
+  } catch (err) { showAuthResult("bad", `<b>✗ 上傳失敗</b><br>${esc(err.message)}<br>請確認是用擴充功能匯出的 cookies.txt（Netscape 格式）。`); }
+}
+const drop = $("#cookieDrop");
+drop.addEventListener("click", () => $("#cookieFile").click());
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", async e => { e.preventDefault(); drop.classList.remove("over"); const f = e.dataTransfer.files[0]; if (f) uploadCookies(await f.text()); });
+$("#cookieFile").addEventListener("change", async e => { const f = e.target.files[0]; if (f) uploadCookies(await f.text()); e.target.value = ""; });
+$("#cookiePasteBtn").addEventListener("click", () => { const t = $("#cookiePaste").value.trim(); if (t) uploadCookies(t); });
+$("#cookieDel").addEventListener("click", async () => {
+  try { const r = await api("/api/cookies", { method: "DELETE" }); renderCookieFile(r.exists, 0); } catch (err) { toast(err.message, "err"); }
+});
+$("#authOff").addEventListener("click", () => {
+  $("#useCookieFile").checked = false; $("#cookiesBrowser").value = ""; $("#premium").checked = false;
+  AUTH.logged_in = AUTH.premium = false; saveAuth();
+  showAuthResult("", "已停用登入，之後以未登入狀態下載。");
+  renderAuthStatus(); onOptionChange();
+});
+
+/* ---------------- Simple / Advanced UI ---------------- */
+let UI = "simple"; try { UI = localStorage.getItem("ytdl-ui") || "simple"; } catch {}
+const uiTabs = initTabs($("#uiTabs"), b => setUi(b.dataset.ui));
+function setUi(m) {
+  UI = m; try { localStorage.setItem("ytdl-ui", m); } catch {}
+  uiTabs.set(m, "ui");
+  $("#simpleWrap").classList.toggle("hidden", m !== "simple");
+  $("#advancedWrap").classList.toggle("hidden", m !== "advanced");
+  if (m === "advanced") { modeTabs.move(); fmtTabs.move(); }
+}
+$("#goAdvanced").addEventListener("click", e => { e.preventDefault(); setUi("advanced"); });
+
+const IC = {
+  video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="M17 10l5-3v10l-5-3z"/></svg>',
+  music: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+  wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0"/></svg>',
+  subs: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 12h3M14 12h3M7 16h10"/></svg>',
+  star: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3 6.9 7.5.7-5.7 5 1.7 7.4L12 18l-6.5 4 1.7-7.4-5.7-5 7.5-.7z"/></svg>',
+  img: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>',
+};
+function pickSubLangs() {
+  const subs = S.info?.subtitles || [], autos = S.info?.auto_captions || [];
+  const man = subs.filter(s => /^(zh|en)/i.test(s.lang)).map(s => s.lang);
+  if (man.length) return { languages: man, auto_languages: [] };
+  const want = ["zh-Hant", "zh-TW", "zh-Hans", "en", "en-orig"];
+  return { languages: [], auto_languages: want.filter(w => autos.some(a => a.lang === w)).slice(0, 2) };
+}
+function presetList() {
+  const i = S.info || {}, top = i.heights?.[0];
+  const hasSubs = (i.subtitles?.length || 0) + (i.auto_captions?.length || 0) > 0;
+  const isPl = i.type === "playlist";
+  const L = [
+    { id: "best", ic: "video", t: "最佳畫質", s: `${top ? top + "p · " : ""}MP4 影片`, o: { mode: "av", video: { container: "mp4" } } },
+    { id: "1080", ic: "video", t: "1080p", s: "MP4 · H.264 到處都能播", o: { mode: "av", video: { max_height: "1080", codec: "h264", container: "mp4" } }, show: !top || top >= 1080 },
+    { id: "720", ic: "video", t: "720p", s: "MP4 · 檔案較小", o: { mode: "av", video: { max_height: "720", codec: "h264", container: "mp4" } }, show: !top || top >= 720 },
+    { id: "mp3", ic: "music", t: "MP3 音樂", s: "320 kbps · 含封面", o: { mode: "audio", audio: { codec: "mp3", quality: "320K" } } },
+    { id: "m4a", ic: "wave", t: "原始音質", s: "M4A · 不重新壓縮", o: { mode: "audio", audio: { codec: "m4a", quality: "0" } } },
+    { id: "subs", ic: "subs", t: "字幕", s: "SRT · 中文 / 英文", o: { mode: "subs" }, show: isPl || hasSubs },
+    { id: "thumb", ic: "img", t: "封面圖", s: "JPG 最高解析度", o: { mode: "thumb" } },
+  ];
+  L.splice(1, 0, AUTH.premium && (($("#useCookieFile").checked) || $("#cookiesBrowser").value)
+    ? { id: "premium", ic: "star", t: "Premium 最高畫質", s: "1080p 高位元率 · MP4", gold: true, o: { mode: "av", video: { container: "mp4", premium: true } } }
+    : { id: "premium-lock", ic: "star", t: "Premium 畫質", s: "登入 Premium 帳號後解鎖", gold: true, locked: true });
+  return L.filter(p => p.show !== false);
+}
+function renderPresets() {
+  if (!$("#presets")) return;
+  $("#presets").innerHTML = presetList().map(p => `<button class="preset ${p.gold ? "gold" : ""} ${p.locked ? "locked" : ""}" data-p="${p.id}">
+    <span class="pi">${IC[p.ic]}</span><b>${esc(p.t)}</b><span class="ps">${esc(p.s)}</span>
+    <svg class="go" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="${p.locked ? "M7 11V7a5 5 0 0110 0v4M5 11h14v10H5z" : "M5 12h14M13 6l6 6-6 6"}"/></svg></button>`).join("");
+}
+document.addEventListener("pointermove", e => {
+  const p = e.target.closest?.(".preset"); if (!p) return;
+  const r = p.getBoundingClientRect(); p.style.setProperty("--mx", `${e.clientX - r.left}px`); p.style.setProperty("--my", `${e.clientY - r.top}px`);
+});
+$("#presets").addEventListener("click", async e => {
+  const b = e.target.closest(".preset"); if (!b || !S.info) return;
+  const p = presetList().find(x => x.id === b.dataset.p);
+  if (!p) return;
+  if (p.locked) { openAuth(); return; }
+  const isPl = S.info.type === "playlist";
+  const o = {
+    mode: p.o.mode, playlist: isPl, playlist_items: playlistItems(),
+    video: { ...(p.o.video || {}) },
+    audio: { ...(p.o.audio || {}) },
+    subs: p.o.mode === "subs" ? { ...pickSubLangs(), format: "srt", all: isPl } : {},
+    extras: { embed_metadata: true, embed_chapters: true, embed_thumbnail: p.o.mode !== "subs", thumb_format: "jpg",
+              template: "%(title)s [%(id)s].%(ext)s", fragments: 4, retries: 10 },
+    network: networkOpts(),
+  };
+  if (p.o.mode === "subs" && !isPl && !o.subs.languages.length && !o.subs.auto_languages.length) { toast("此影片沒有中文或英文字幕，請到進階模式選擇其他語言", "err"); return; }
+  if (isPl && !o.playlist_items && !S.plSel.size) { toast("請至少選擇一部影片", "err"); return; }
+  b.disabled = true;
+  await startDownload(o);
+  b.disabled = false;
+});
+
+loadPrefs();
+renderQuality();
+applyMode();
+renderAuthStatus();
+setUi(UI);
+refreshJobs();
+loadMeta();
+</script>
+</body>
+</html>

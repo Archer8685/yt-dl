@@ -1,0 +1,2 @@
+yt-dlp[default]
+flask>=3.0
