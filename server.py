@@ -26,10 +26,33 @@ from pathlib import Path
 
 import yt_dlp
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
-from yt_dlp.utils import download_range_func, parse_duration
+from yt_dlp.utils import download_range_func, parse_duration, prepend_extension
 
-ROOT = Path(__file__).resolve().parent
-DEFAULT_DOWNLOAD_DIR = ROOT / "downloads"
+APP_NAME = "YT-Downloader"
+RELEASES_URL = "https://github.com/Archer8685/yt-dl/releases/latest"
+# PyInstaller 打包版（.exe / macOS）：程式本身解壓在暫存資料夾，設定與 cookies 改存使用者資料夾
+FROZEN = bool(getattr(sys, "frozen", False))
+BUNDLE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+
+def _user_data_dir() -> Path:
+    if os.name == "nt":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / APP_NAME
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / APP_NAME
+
+
+if FROZEN:
+    ROOT = _user_data_dir()
+    # 不能和 macOS 解壓出來的執行檔 ~/Downloads/YT-Downloader 同名
+    DEFAULT_DOWNLOAD_DIR = Path.home() / "Downloads" / "YT-Downloads"
+    # 優先使用打包在裡面的 ffmpeg / ffprobe / deno（YouTube 需要 JS runtime）
+    os.environ["PATH"] = os.pathsep.join([str(BUNDLE / "bin"), os.environ.get("PATH", "")])
+else:
+    ROOT = BUNDLE
+    DEFAULT_DOWNLOAD_DIR = ROOT / "downloads"
+ROOT.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = ROOT / "settings.json"
 # 剩餘空間低於此值就停止下載，保護系統碟（預設 2 GB）
 MIN_FREE_BYTES = int(float(os.environ.get("YTDL_MIN_FREE_GB", "2")) * 1024**3)
@@ -114,17 +137,33 @@ def _vtuple(v: str | None):
     return tuple(int(x) for x in re.findall(r"\d+", v or "0"))
 
 
+RELEASES_API = "https://api.github.com/repos/Archer8685/yt-dl/releases/latest"
+
+
+def _release_ytdlp_version(tag: str) -> str | None:
+    """Releases 的 tag 是 engine-<yt-dlp 版本>-<commit>。"""
+    m = re.fullmatch(r"engine-(\d+(?:\.\d+)+)-\w+", tag or "")
+    return m.group(1) if m else None
+
+
 def latest_version(force=False) -> str | None:
-    """查 PyPI 最新版本（快取 6 小時）。nightly 頻道包含 pre-release。"""
+    """最新可用的 yt-dlp 版本（快取 6 小時）。
+    原始碼版查 PyPI（nightly 頻道包含 pre-release）；打包版查 GitHub Releases 已打包好的版本，
+    避免 PyPI 剛出新版、Releases 還沒重建時，叫使用者去下載其實還是舊版的檔案。"""
     if not force and time.time() - _LATEST["checked"] < 6 * 3600:
         return _LATEST["version"]
     try:
-        with urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=8) as r:
-            data = json.load(r)
-        versions = [data["info"]["version"]]
-        if CHANNEL == "nightly":
-            versions += list(data.get("releases", {}).keys())
-        _LATEST["version"] = max(versions, key=_vtuple)
+        if FROZEN:
+            req = urllib.request.Request(RELEASES_API, headers={"Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                _LATEST["version"] = _release_ytdlp_version(json.load(r).get("tag_name"))
+        else:
+            with urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=8) as r:
+                data = json.load(r)
+            versions = [data["info"]["version"]]
+            if CHANNEL == "nightly":
+                versions += list(data.get("releases", {}).keys())
+            _LATEST["version"] = max(versions, key=_vtuple)
     except Exception:  # noqa: BLE001, S110 — 離線時忽略
         pass
     _LATEST["checked"] = time.time()
@@ -164,6 +203,8 @@ SPONSOR_CATS = ("sponsor", "intro", "outro", "selfpromo", "preview",
                 "filler", "interaction", "music_offtopic", "poi_highlight", "chapter")
 BROWSERS = ("chrome", "edge", "firefox", "brave", "opera", "vivaldi", "chromium", "safari")
 TEMP_SUFFIXES = (".part", ".ytdl", ".temp", ".frag")
+# yt-dlp 分開下載影像 / 音訊串流時的檔名：<檔名>.f<格式代號>.<副檔名>
+STREAM_RE = re.compile(r"\.f[\w-]+\.(mp4|webm|m4a|mkv|mov|flv|3gp|mp3|opus|ogg|aac|ts)$", re.IGNORECASE)
 
 
 class Cancelled(Exception):
@@ -536,6 +577,10 @@ def build_opts(o: dict, job_dir: Path) -> dict:
         opts["getcomments"] = True
         opts["writeinfojson"] = True
     opts["postprocessors"] = pps
+    # yt-dlp 每次呼叫 FFmpeg 都加 -movflags +faststart：寫完輸出後，再把整個檔案往後挪一次，好把索引搬到檔頭。
+    # 合併、寫入中繼資料各要多重寫一整份，索引在檔頭時嵌入封面又得再挪一次；100 GB 的 4K 因此多花一兩個小時。
+    # 本機播放不需要 faststart：關掉後每個步驟只寫一次，索引留在檔尾，嵌入封面只改檔尾。
+    opts["postprocessor_args"] = {"ffmpeg": ["-movflags", "-faststart"]}
     return opts
 
 
@@ -602,6 +647,9 @@ class Job:
         self.log: deque[str] = deque(maxlen=200)
         self.cancel_flag = threading.Event()
         self.rate = RateMeter()
+        self.pp_out: Path | None = None  # 目前後處理步驟正在寫出的暫存檔
+        self.pp_total = 0  # 預計寫出的大小（輸入檔總和）
+        self.pp_started = 0.0
         self.created = time.time()
         self.finished = None
 
@@ -618,14 +666,15 @@ class Job:
         return out
 
     def partial_bytes(self) -> int:
-        """尚未完成、可續傳的暫存資料大小。"""
+        """可接著用的暫存資料大小：下載到一半的 .part，以及已下載完、還沒合併的串流（<檔名>.f<格式>.<副檔名>）。
+        縮圖、字幕不算；合併到一半的 <檔名>.temp.<副檔名> 也不算，重跑時 FFmpeg 會整個重寫。"""
         tmp = self.dir / ".tmp"
         if not tmp.exists():
             return 0
         total = 0
         for p in tmp.rglob("*"):
             try:
-                if p.is_file() and ".part" in p.name:
+                if p.is_file() and (".part" in p.name or STREAM_RE.search(p.name)):
                     total += p.stat().st_size
             except OSError:
                 pass
@@ -734,6 +783,39 @@ def _pp_label(name: str | None) -> str:
     return PP_NAMES.get(name) or PP_NAMES.get(f"FFmpeg{name}") or name
 
 
+def _file_size(path) -> int:
+    try:
+        return os.path.getsize(path)
+    except (OSError, TypeError):
+        return 0
+
+
+def _pp_start(job: Job, info: dict):
+    """記下這個後處理步驟會寫出的暫存檔（yt-dlp 一律寫到 <檔名>.temp.<副檔名>）與預計大小。"""
+    path = info.get("filepath")
+    job.pp_out = Path(prepend_extension(path, "temp")) if path else None
+    job.pp_total = sum(_file_size(f) for f in (info.get("__files_to_merge") or [path]))
+    job.pp_started = time.time()
+
+
+def _pp_progress(job: Job):
+    """FFmpeg 合併 / 寫入中繼資料時不回報進度；以正在寫出的暫存檔大小估算，避免看起來像卡住。"""
+    out, total = job.pp_out, job.pp_total
+    if job.status != "processing" or not out or not total:
+        return
+    try:
+        st = out.stat()
+    except OSError:
+        return
+    if st.st_mtime < job.pp_started - 2:  # 上次中斷殘留的舊暫存檔，FFmpeg 還沒開始覆寫
+        return
+    done = st.st_size
+    job.downloaded, job.total = done, total
+    job.progress = round(min(100.0, done * 100 / total), 1)
+    job.rate.update(("pp", job.stage, out.name), done, total)
+    job.speed, job.eta = job.rate.speed, job.rate.eta
+
+
 def run_job(job: Job):
     with MAX_PARALLEL:
         if job.cancel_flag.is_set():
@@ -793,16 +875,26 @@ def run_job(job: Job):
             if job.cancel_flag.is_set():
                 raise Cancelled()
             if d.get("status") == "started":
-                job.status = "processing"
-                name = d.get("postprocessor")
-                job.stage = _pp_label(name)
+                _pp_start(job, d.get("info_dict") or {})
+                job.progress, job.downloaded, job.total = 0.0, 0, None  # 不沿用下載階段的 100%
                 job.speed = job.eta = None
+                job.stage = _pp_label(d.get("postprocessor"))
+                job.status = "processing"
+            elif d.get("status") == "finished":
+                job.pp_out = None
 
         opts["logger"] = JobLogger(job)
         opts["progress_hooks"] = [hook]
         opts["postprocessor_hooks"] = [pp_hook]
         job.dir.mkdir(parents=True, exist_ok=True)
         job.save()
+        watching = threading.Event()
+
+        def watch_pp():
+            while not watching.wait(1):
+                _pp_progress(job)
+
+        threading.Thread(target=watch_pp, daemon=True).start()
         try:
             free = disk_info(job.dir)["free"]
             if free is not None and free < MIN_FREE_BYTES:
@@ -855,6 +947,8 @@ def run_job(job: Job):
             else:
                 job.status, job.error, job.stage = "error", _clean_err(e), "失敗"
         finally:
+            watching.set()
+            job.pp_out = None
             # 失敗時保留 .tmp 裡的暫存檔，才能按「繼續下載」從中斷處接著下載
             if job.status != "error":
                 shutil.rmtree(job.dir / ".tmp", ignore_errors=True)
@@ -985,6 +1079,7 @@ def api_zip(job_id):
 @app.get("/api/meta")
 def api_meta():
     return jsonify(version=yt_dlp.version.__version__, latest=latest_version(), channel=CHANNEL,
+                   frozen=FROZEN, releases_url=RELEASES_URL,
                    ffmpeg=bool(shutil.which("ffmpeg")), cookies_file=COOKIES_FILE.is_file(),
                    disk=disk_info(get_download_dir()), min_free=MIN_FREE_BYTES,
                    just_updated=os.environ.get("YTDL_JUST_UPDATED") == "1",
@@ -1037,6 +1132,8 @@ def api_settings_save():
 @app.post("/api/update")
 def api_update():
     """手動更新 yt-dlp；沒有進行中的工作時自動重啟套用。"""
+    if FROZEN:
+        return jsonify(error="打包版無法自行更新，請到 GitHub Releases 下載最新版", url=RELEASES_URL), 409
     if UPDATE_STATE["running"]:
         return jsonify(error="更新進行中"), 409
     if _busy():
@@ -1127,8 +1224,8 @@ def api_auth_test():
 
 
 def startup_update():
-    """啟動時檢查 PyPI，有新版就 pip 升級並重啟（只做一次，避免迴圈）。"""
-    if os.environ.get("YTDL_AUTO_UPDATE", "1") == "0" or os.environ.get("YTDL_JUST_UPDATED") == "1":
+    """啟動時檢查 PyPI，有新版就 pip 升級並重啟（只做一次，避免迴圈）。打包版沒有 pip，改由網頁提示下載新版。"""
+    if FROZEN or os.environ.get("YTDL_AUTO_UPDATE", "1") == "0" or os.environ.get("YTDL_JUST_UPDATED") == "1":
         return
     current = yt_dlp.version.__version__
     latest = latest_version(force=True)
@@ -1145,7 +1242,7 @@ def periodic_update_check():
     """每 6 小時檢查一次；有新版且沒有進行中的工作就自動更新重啟。"""
     while True:
         time.sleep(6 * 3600)
-        if os.environ.get("YTDL_AUTO_UPDATE", "1") == "0":
+        if FROZEN or os.environ.get("YTDL_AUTO_UPDATE", "1") == "0":
             continue
         latest = latest_version(force=True)
         if latest and _vtuple(latest) > _vtuple(yt_dlp.version.__version__) and not _busy():
@@ -1156,12 +1253,38 @@ def periodic_update_check():
 
 @app.get("/")
 def index():
-    return send_from_directory(ROOT, "index.html")
+    return send_from_directory(BUNDLE, "index.html")
 
 
-if __name__ == "__main__":
+def _port_in_use(host: str, port: int) -> bool:
+    import socket
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1" if host in ("0.0.0.0", "") else host, port)) == 0
+
+
+def main():
+    url = f"http://127.0.0.1:{PORT}"
+    for stream in (sys.stdout, sys.stderr):  # 主控台編碼不支援的字元（例如影片標題的 emoji）不要讓程式當掉
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    if FROZEN:
+        import webbrowser
+        if _port_in_use(HOST, PORT):  # 已經開著（重複點兩下）：直接開網頁
+            print(f"引擎已在執行中，開啟 {url}")
+            if os.environ.get("YTDL_NO_BROWSER") != "1":
+                webbrowser.open(url)
+            return
+        if os.environ.get("YTDL_NO_BROWSER") != "1":
+            threading.Timer(1.5, webbrowser.open, (url,)).start()
+        print("下載器已啟動。使用期間請保持這個視窗開著，關閉視窗就會停止引擎。")
+        print(f"下載的檔案預設存在：{get_download_dir()}")
     startup_update()
     load_jobs()
     threading.Thread(target=periodic_update_check, daemon=True).start()
-    print(f"YT 下載器： http://{HOST}:{PORT}   （yt-dlp {yt_dlp.version.__version__}）")
+    print(f"YT 下載器： {url}   （yt-dlp {yt_dlp.version.__version__}）", flush=True)
     app.run(host=HOST, port=PORT, threaded=True, debug=False)
+
+
+if __name__ == "__main__":
+    main()

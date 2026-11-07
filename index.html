@@ -234,6 +234,7 @@ tr.sel .selbox::after{content:"";width:6px;height:6px;border-radius:2px;backgrou
 .ext{font-family:var(--mono);font-size:10.5px;padding:2px 6px;border-radius:5px;background:rgba(139,92,246,.18);color:#c4b5fd;text-transform:uppercase}
 .offline{margin-bottom:14px;padding:12px 14px;border-radius:12px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.35);color:#fde68a;font-size:13px;line-height:1.6}
 .offline b{color:#fef3c7}
+.dl-row{flex-wrap:wrap}.dl-row .btn{text-decoration:none}
 .job.stale{opacity:.55}
 .job.stale .bar i{animation:none}
 .err-box{margin-top:10px;padding:10px 12px;border-radius:9px;background:rgba(248,113,113,.07);border:1px solid rgba(248,113,113,.25);color:#fecaca;font-size:12.5px;white-space:pre-wrap;word-break:break-word}
@@ -360,12 +361,25 @@ footer{margin-top:60px;text-align:center;color:var(--dim);font-size:12px;line-he
     <p class="desc">這個網頁只是操作介面，實際下載由你電腦上的 yt-dlp 引擎執行（GitHub Pages 無法執行 yt-dlp）。第一次使用請先啟動引擎：</p>
     <div class="grid g2">
       <div>
-        <div class="label">1. 下載專案並啟動（會自動安裝 / 更新 yt-dlp）</div>
-        <pre class="log" style="margin:0;max-height:none">git clone https://github.com/Archer8685/yt-dl.git
+        <div class="label">1. 下載引擎，點兩下執行（免安裝，已內建 FFmpeg）</div>
+        <div class="row dl-row">
+          <a class="btn primary" href="https://github.com/Archer8685/yt-dl/releases/latest/download/YT-Downloader-Windows.exe">Windows 版（.exe）</a>
+          <a class="btn" href="https://github.com/Archer8685/yt-dl/releases/latest/download/YT-Downloader-macOS-AppleSilicon.zip">macOS 版（Apple 晶片）</a>
+        </div>
+        <p class="desc" style="margin:10px 0 0">
+          Windows 第一次執行若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。<br>
+          macOS 解壓縮後，先在「終端機」執行一次 <span class="mono">xattr -dr com.apple.quarantine ~/Downloads/YT-Downloader</span>，再點兩下開啟。<br>
+          執行後會開一個視窗，使用期間請保持開著。檔案預設存在「下載」資料夾裡的 YT-Downloads。
+          <a href="https://github.com/Archer8685/yt-dl/releases/latest" target="_blank" rel="noopener">所有版本</a>
+        </p>
+        <details style="margin-top:10px">
+          <summary class="desc" style="cursor:pointer">進階：用 Python 原始碼執行（Linux、Intel Mac）</summary>
+          <pre class="log" style="margin:8px 0 0;max-height:none">git clone https://github.com/Archer8685/yt-dl.git
 cd yt-dl
 start.bat        # Windows
 ./start.sh       # macOS / Linux</pre>
-        <p class="desc" style="margin:10px 0 0">需要 Python 3.10+、FFmpeg、Node.js 或 Deno。</p>
+          <p class="desc" style="margin:8px 0 0">需要 Python 3.10+、FFmpeg、Node.js 或 Deno。</p>
+        </details>
       </div>
       <div>
         <div class="label">2. 引擎位址</div>
@@ -694,7 +708,7 @@ start.bat        # Windows
     </div>
     <div class="offline hidden" id="offline" role="status">
       <b>⚠ 與下載引擎的連線中斷了</b>，下方進度已停止更新，正在自動重新連線…<br>
-      通常是執行引擎的視窗被關閉、電腦睡眠或重開機。重新執行 <span class="mono">start.bat</span> 後，
+      通常是執行引擎的視窗被關閉、電腦睡眠或重開機。重新開啟 <span class="mono">YT-Downloader</span>（或 <span class="mono">start.bat</span>）後，
       中斷的工作會出現「繼續下載」，從中斷處接著下載，已下載的部分不會浪費。
     </div>
     <div class="storage" id="storage">
@@ -1271,7 +1285,7 @@ function renderJobs(jobs, logs) {
   const scrolls = {}; $$("pre.log", box).forEach(p => scrolls[p.dataset.id] = p.scrollHeight - p.scrollTop - p.clientHeight < 8);
   box.innerHTML = jobs.map(j => {
     const running = ["queued", "downloading", "processing"].includes(j.status);
-    const indet = running && (j.status === "processing" || j.status === "queued" || !j.progress);
+    const indet = running && (j.status === "queued" || !j.progress);
     const files = j.files || [];
     const resume = j.status === "error"
       ? `<button class="btn sm primary" data-act="resume" title="${j.partial ? "從中斷處接著下載" : "用相同設定重新下載"}">${j.partial ? `繼續下載（已下載 ${fmtBytes(j.partial)}）` : "重試"}</button>` : "";
@@ -1331,11 +1345,12 @@ async function loadMeta() {
   try {
     const m = await api("/api/meta");
     $("#setupCard").classList.add("hidden");
-    $("#envPill").innerHTML = `<span class="dot ${m.ffmpeg ? "" : "bad"}"></span><span>yt-dlp ${esc(m.version)}${m.channel === "nightly" ? " nightly" : ""}${m.ffmpeg ? " · FFmpeg ✓" : " · 缺少 FFmpeg"}</span>`;
+    $("#envPill").innerHTML = `<span class="dot ${m.ffmpeg ? "" : "bad"}"></span><span>${m.ffmpeg ? "引擎已連線" : "引擎已連線 · 缺少 FFmpeg"}</span>`;
     const canUpdate = m.latest && newer(m.latest, m.version);
     $("#updateBtn").classList.toggle("hidden", !canUpdate && !m.update_running);
     $("#updateBtn").disabled = !!m.update_running;
-    $("#updateBtn").textContent = m.update_running ? "更新中…" : `更新至 ${m.latest}`;
+    $("#updateBtn").textContent = m.update_running ? "更新中…" : m.frozen ? `下載新版引擎（yt-dlp ${m.latest}）` : `更新至 ${m.latest}`;
+    $("#updateBtn").dataset.url = m.frozen ? (m.releases_url || "") : "";
     if (m.update_message && !m.update_running && /失敗/.test(m.update_message)) toast(m.update_message, "err");
     if (m.just_updated && !sessionStorage.getItem("ytdl-updated-toast")) { toast(`yt-dlp 已自動更新至 ${m.version}`, "ok"); try { sessionStorage.setItem("ytdl-updated-toast", "1"); } catch {} }
     if (!m.cookies_file) renderCookieFile(false, 0);
@@ -1361,6 +1376,9 @@ $("#apiConnect").addEventListener("click", async () => {
   else toast("連線失敗，請確認引擎已啟動、位址正確", "err");
 });
 $("#updateBtn").addEventListener("click", async () => {
+  // 打包版（.exe / macOS）沒有 pip，改到 GitHub Releases 下載新版；Releases 每天會用最新 yt-dlp 重建
+  const rel = $("#updateBtn").dataset.url;
+  if (rel) { window.open(rel, "_blank", "noopener"); toast("下載新版後，關閉目前的引擎視窗再開啟新版", "ok"); return; }
   try {
     await api("/api/update", { method: "POST" });
     toast("開始更新 yt-dlp，完成後引擎會自動重啟", "ok");

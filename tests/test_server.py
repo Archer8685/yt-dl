@@ -238,6 +238,25 @@ def test_interrupted_job_is_restored_after_restart(tmp_path, monkeypatch):
     assert restored.partial_bytes() == 2048
 
 
+def test_streams_waiting_for_merge_count_as_partial_and_are_not_moved(client, tmp_path, monkeypatch):
+    old, new = tmp_path / "c", tmp_path / "d"
+    job = server.Job("https://x", {"mode": "av"}, "t", job_dir=old / "abc")
+    job.status = "error"
+    tmp = job.dir / ".tmp"
+    tmp.mkdir(parents=True)
+    (tmp / "a.f401.mp4").write_bytes(b"x" * 600)  # 已下載完、等待合併
+    (tmp / "a.temp.mp4").write_bytes(b"x" * 50)  # 合併到一半，重跑會重寫
+    assert job.partial_bytes() == 600
+    server.JOBS[job.id] = job
+    monkeypatch.setattr(server, "get_download_dir", lambda: new)  # 使用者換了儲存位置
+    monkeypatch.setattr(server, "run_job", lambda j: None)
+    try:
+        assert client.post(f"/api/jobs/{job.id}/resume").status_code == 200
+        assert job.dir == old / "abc" and (tmp / "a.f401.mp4").exists(), "不能刪掉已下載的串流"
+    finally:
+        server.JOBS.pop(job.id, None)
+
+
 def test_rate_meter_smooths_bursty_chunks():
     t = [0.0]
     m = server.RateMeter(window=10, clock=lambda: t[0])
@@ -267,6 +286,145 @@ def test_postprocessor_labels_with_and_without_ffmpeg_prefix():
     assert server._pp_label("Merger") == "合併影音軌"
     assert server._pp_label("SomethingNew") == "SomethingNew"
     assert server._pp_label(None) == "後處理"
+
+
+def test_ffmpeg_steps_skip_faststart_rewrite():
+    args = opts(mode="av")["postprocessor_args"]
+    # yt-dlp 對每個後處理的第一個輸出會查到 "ffmpeg" 這個鍵，排在它自己加的 +faststart 之後
+    for pp in ("Merger", "FFmpegMetadata", "EmbedThumbnail"):
+        got = server.yt_dlp.utils._configuration_args(pp, args, "ffmpeg", ["_o1", "_o", ""])
+        assert got == ["-movflags", "-faststart"]
+
+
+def _top_atoms(path):
+    import struct
+    names = []
+    with open(path, "rb") as f:
+        while head := f.read(8):
+            size, name = struct.unpack(">I4s", head)
+            if size == 1:
+                size = struct.unpack(">Q", f.read(8))[0] - 8
+            names.append(name.decode())
+            f.seek(size - 8, 1)
+    return names
+
+
+@pytest.mark.skipif(not server.shutil.which("ffmpeg"), reason="需要 ffmpeg")
+def test_merge_keeps_index_at_end_so_cover_embed_is_cheap(tmp_path):
+    import subprocess
+
+    from mutagen.mp4 import MP4, MP4Cover
+    from yt_dlp.postprocessor import FFmpegMergerPP
+    v, a, out = tmp_path / "v.mp4", tmp_path / "a.m4a", tmp_path / "out.mp4"
+    ff = ["ffmpeg", "-v", "error", "-y"]
+    subprocess.run([*ff, "-f", "lavfi", "-i", "testsrc=d=2:s=160x120", "-c:v", "mpeg4", str(v)], check=True)
+    subprocess.run([*ff, "-f", "lavfi", "-i", "sine=d=2", "-c:a", "aac", str(a)], check=True)
+    ydl = server.yt_dlp.YoutubeDL({"quiet": True, "postprocessor_args": opts(mode="av")["postprocessor_args"]})
+    fmts = [{"vcodec": "mpeg4", "acodec": "none", "protocol": "https"},
+            {"vcodec": "none", "acodec": "aac", "protocol": "https"}]
+    FFmpegMergerPP(ydl).run({"__files_to_merge": [str(v), str(a)], "requested_formats": fmts,
+                             "filepath": str(out), "ext": "mp4"})
+    atoms = _top_atoms(out)
+    assert atoms.index("moov") > atoms.index("mdat"), "索引應留在檔尾，不再整份往後挪"
+    meta = MP4(out)
+    meta.tags["covr"] = [MP4Cover(b"\xff\xd8\xff" + b"0" * 1000, imageformat=MP4Cover.FORMAT_JPEG)]
+    meta.save()
+    atoms = _top_atoms(out)
+    assert atoms.index("moov") > atoms.index("mdat")
+    assert MP4(out).tags["covr"], "封面要能正常嵌入、檔案仍可讀"
+
+
+def test_postprocess_progress_follows_output_file(tmp_path):
+    job = server.Job("https://x", {"mode": "av"}, "t", job_dir=tmp_path / "j")
+    tmp = job.dir / ".tmp"
+    tmp.mkdir(parents=True)
+    (tmp / "a.f401.mp4").write_bytes(b"x" * 600)
+    (tmp / "a.f251.webm").write_bytes(b"x" * 400)
+    (tmp / "other.temp.mp4").write_bytes(b"x" * 999)  # 標題剛好含 .temp. 的無關檔案
+    out = tmp / "a.temp.mp4"
+    out.write_bytes(b"x" * 900)
+    server.os.utime(out, (1, 1))  # 上次中斷殘留的舊暫存檔
+    job.status, job.stage = "processing", "合併影音軌"
+    server._pp_start(job, {"filepath": str(tmp / "a.mp4"),
+                           "__files_to_merge": [str(tmp / "a.f401.mp4"), str(tmp / "a.f251.webm")]})
+    assert job.pp_out == out and job.pp_total == 1000
+    server._pp_progress(job)
+    assert job.progress == 0.0, "舊暫存檔不能當成進度"
+    out.write_bytes(b"x" * 250)  # FFmpeg 覆寫後開始成長
+    server._pp_progress(job)
+    assert (job.progress, job.downloaded, job.total) == (25.0, 250, 1000)
+    job.status = "done"
+    out.write_bytes(b"x" * 900)
+    server._pp_progress(job)  # 不在後處理時不更新
+    assert job.progress == 25.0
+
+
+def test_postprocessor_hook_sets_expected_size(fake_ydl, monkeypatch, tmp_path):
+    seen = {}
+
+    def merge(self, urls):
+        v, a = tmp_path / "v.mp4", tmp_path / "a.webm"
+        v.write_bytes(b"x" * 300)
+        a.write_bytes(b"x" * 100)
+        hook = self.opts["postprocessor_hooks"][0]
+        hook({"status": "started", "postprocessor": "Merger",
+              "info_dict": {"filepath": str(tmp_path / "m.mp4"), "__files_to_merge": [str(v), str(a)]}})
+        seen.update(total=self.job.pp_total, status=self.job.status, progress=self.job.progress)
+        hook({"status": "finished", "postprocessor": "Merger", "info_dict": {}})
+        seen["after"] = self.job.pp_out
+        (self.home / "big.mp4").write_bytes(b"done")
+        return 0
+
+    orig_init = FakeYDL.__init__
+
+    def init(self, o):
+        orig_init(self, o)
+        self.opts = o
+        self.job = job
+
+    monkeypatch.setattr(FakeYDL, "__init__", init)
+    monkeypatch.setattr(FakeYDL, "download", merge)
+    job = server.Job("https://www.youtube.com/watch?v=x", {"mode": "av"}, "t")
+    job.progress = 100.0
+    server.run_job(job)
+    assert seen == {"total": 400, "status": "processing", "progress": 0.0, "after": None}
+    assert job.status == "done"
+
+
+def test_frozen_build_points_updates_to_releases(client, monkeypatch):
+    monkeypatch.setattr(server, "FROZEN", True)
+    monkeypatch.setattr(server, "latest_version", lambda force=False: "2099.1.1")
+    meta = client.get("/api/meta").get_json()
+    assert meta["frozen"] is True and meta["releases_url"].startswith("https://github.com/")
+    r = client.post("/api/update")
+    assert r.status_code == 409 and r.get_json()["url"] == server.RELEASES_URL
+    monkeypatch.setattr(server, "pip_upgrade", lambda: pytest.fail("打包版不能呼叫 pip"))
+    server.startup_update()
+
+
+def test_release_tag_gives_bundled_ytdlp_version():
+    assert server._release_ytdlp_version("engine-2026.10.26-a1b2c3d") == "2026.10.26"
+    assert server._release_ytdlp_version("v1.0") is None
+    assert server._release_ytdlp_version(None) is None
+
+
+def test_thumbnail_written_before_a_failure_is_not_progress(fake_ydl, monkeypatch):
+    def thumb_then_fail(self, urls):
+        FakeYDL.calls += 1
+        self.tmp.mkdir(parents=True, exist_ok=True)
+        (self.tmp / "a.jpg").write_bytes(b"x" * 5000)
+        (self.tmp / "a.en.vtt").write_bytes(b"x" * 100)
+        raise server.yt_dlp.utils.DownloadError("ERROR: Requested format is not available")
+    monkeypatch.setattr(FakeYDL, "download", thumb_then_fail)
+    job = server.Job("https://www.youtube.com/watch?v=x", {"mode": "av"}, "t")
+    server.run_job(job)
+    assert fake_ydl.calls == 1, "只寫了縮圖、字幕不算有進度，不該自動續傳"
+    assert job.partial_bytes() == 0
+
+
+def test_user_data_dir_is_outside_the_bundle():
+    d = server._user_data_dir()
+    assert d.name == server.APP_NAME and d.is_absolute()
 
 
 def test_cookies_upload_rejects_non_netscape(client):

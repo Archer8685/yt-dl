@@ -1,0 +1,115 @@
+name: Release engine
+
+# 把引擎打包成免安裝的 Windows .exe 與 macOS 版本，發布到 GitHub Releases。
+# - 程式有變更時重建
+# - 每天檢查一次 yt-dlp 新版（YouTube 常改版，打包版無法自行更新，靠重建跟上）
+# 同一份程式碼＋同一版 yt-dlp 只發布一次（tag：engine-<yt-dlp 版本>-<commit>）。
+on:
+  push:
+    branches: [main]
+    paths: [server.py, index.html, build_exe.py, requirements.txt, .github/workflows/release.yml]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      ytdlp: ${{ steps.v.outputs.ytdlp }}
+      build: ${{ steps.v.outputs.build }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ytdlp=$(curl -fsSL https://pypi.org/pypi/yt-dlp/json | jq -r .info.version)
+          tag="engine-${ytdlp}-${GITHUB_SHA::7}"
+          echo "ytdlp=$ytdlp" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$tag 已發布，略過"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -r requirements.txt pyinstaller pytest
+      - name: Test
+        run: python -m pytest -q
+      - name: Build
+        run: python build_exe.py
+      - name: Smoke test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then exe=dist/YT-Downloader.exe; cp dist/YT-Downloader-*.exe "$exe"
+          else (cd dist && unzip -o -q YT-Downloader-*.zip) && exe=dist/YT-Downloader; fi
+          YTDL_PORT=8799 YTDL_NO_BROWSER=1 YTDL_DOWNLOAD_DIR="$RUNNER_TEMP/dl" "$exe" &
+          for i in $(seq 60); do
+            if meta=$(curl -fsS http://127.0.0.1:8799/api/meta); then break; fi; sleep 1
+          done
+          echo "$meta"
+          echo "$meta" | grep -q '"frozen":true'
+          echo "$meta" | grep -q '"ffmpeg":true'
+          curl -fsS http://127.0.0.1:8799/ | grep -q "<html"
+          kill %1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.os }}
+          path: |
+            dist/YT-Downloader-*.exe
+            dist/YT-Downloader-*.zip
+
+  release:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          YTDLP: ${{ needs.plan.outputs.ytdlp }}
+        run: |
+          cat > notes.md <<EOF
+          內含 yt-dlp ${YTDLP}、FFmpeg、Deno，不用另外安裝 Python。
+
+          ## Windows
+          下載 **YT-Downloader-Windows.exe**，點兩下執行。
+          第一次執行若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。
+
+          ## macOS（Apple Silicon）
+          下載 **YT-Downloader-macOS-AppleSilicon.zip** 並解壓縮，在「終端機」執行一次：
+          \`xattr -dr com.apple.quarantine ~/Downloads/YT-Downloader\`
+          之後點兩下 YT-Downloader 即可（會開一個終端機視窗，使用期間請保持開著）。
+
+          啟動後會自動開啟 http://127.0.0.1:8765 ，也可以使用 https://archer8685.github.io/yt-dl/ 。
+          檔案預設存在「下載」資料夾裡的 YT-Downloads，可以在網頁上的「儲存位置」更改。
+          EOF
+          gh release create "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "引擎 ${TAG#engine-}" --notes-file notes.md --latest

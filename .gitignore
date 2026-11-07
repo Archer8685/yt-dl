@@ -6,3 +6,5 @@ cookies.txt
 *.ytdl
 .claude/
 settings.json
+build/
+dist/

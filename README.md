@@ -33,6 +33,21 @@ GitHub Pages 只能放靜態網頁，**無法執行 yt-dlp**，所以分成兩�
 
 ## 安裝與啟動
 
+### 免安裝版（建議）
+
+到 [Releases](https://github.com/Archer8685/yt-dl/releases/latest) 下載，已內建 yt-dlp、FFmpeg、Deno，不用裝 Python：
+
+| 系統 | 檔案 | 使用方式 |
+| --- | --- | --- |
+| Windows | `YT-Downloader-Windows.exe` | 點兩下執行。出現「Windows 已保護您的電腦」時按「其他資訊」→「仍要執行」 |
+| macOS（Apple 晶片） | `YT-Downloader-macOS-AppleSilicon.zip` | 解壓縮後在終端機執行一次 `xattr -dr com.apple.quarantine ~/Downloads/YT-Downloader`，再點兩下開啟 |
+
+啟動後會自動開啟 http://127.0.0.1:8765。使用期間請保持引擎視窗開著。檔案預設存在「下載」資料夾裡的 `YT-Downloads`，設定與 cookies 存在 `%LOCALAPPDATA%\YT-Downloader`（macOS：`~/Library/Application Support/YT-Downloader`）。
+
+免安裝版無法自行更新 yt-dlp。GitHub Actions 每天會檢查 yt-dlp 新版並重新打包，網頁出現「下載新版引擎」時，下載新版替換舊版即可。
+
+### 用 Python 原始碼執行（Linux、Intel Mac、開發用）
+
 需要：Python 3.10+、[FFmpeg](https://ffmpeg.org/download.html)、[Node.js](https://nodejs.org) 或 [Deno](https://deno.com)（YouTube 解 JS challenge 用）。
 
 ```bash
@@ -43,6 +58,15 @@ start.bat      # Windows
 ```
 
 啟動後打開 http://127.0.0.1:8765，或打開 GitHub Pages 版介面（會自動連到本機引擎）。
+
+### 自己打包
+
+```bash
+pip install -r requirements.txt pyinstaller
+python build_exe.py      # 產出 dist/YT-Downloader-Windows.exe 或 dist/YT-Downloader-macOS-*.zip
+```
+
+`build_exe.py` 會下載對應平台的 FFmpeg / ffprobe / Deno 放進執行檔。push 到 `main` 或每天排程時，`.github/workflows/release.yml` 會在 Windows 與 macOS 上打包、做啟動測試，並發布到 Releases（同一份程式碼加同一版 yt-dlp 只發布一次）。
 
 ## yt-dlp 自動更新
 
@@ -63,6 +87,7 @@ YouTube 經常改版，yt-dlp 也跟著頻繁更新。引擎有三層自動更�
 | `YTDL_PARALLEL` | 同時下載數（預設 3） |
 | `YTDL_DOWNLOAD_DIR` | 固定下載位置（設定後網頁上就不能改） |
 | `YTDL_MIN_FREE_GB` | 剩餘空間低於此值就停止下載（預設 2） |
+| `YTDL_NO_BROWSER=1` | 免安裝版啟動時不自動開瀏覽器 |
 
 ## 儲存位置與磁碟空間
 
@@ -76,6 +101,8 @@ YouTube 經常改版，yt-dlp 也跟著頻繁更新。引擎有三層自動更�
 - 失敗的工作會保留已下載的暫存資料，按「繼續下載」就能接著下載；「清除已完成」不會刪掉這些工作。
 - 每個工作都存有 `job.json`，引擎被關掉（關視窗、睡眠、重開機）後重新執行 `start.bat`，中斷的工作會顯示「已中斷」與「繼續下載」。
 - 網頁和引擎斷線時，下載佇列上方會出現提示，不會再停在舊的進度上。
+- 合併影音軌、寫入中繼資料時也會顯示進度、速度與剩餘時間。FFmpeg 每個步驟都要把整個檔案寫一遍，100 GB 的檔案在同一顆硬碟上每步約需半小時，請耐心等候。
+- 為了少寫幾遍大檔案，MP4 不加 faststart（索引放在檔尾）。本機播放沒有差別；如果要放到網站上邊下載邊播放，可以用 `ffmpeg -i in.mp4 -c copy -movflags +faststart out.mp4` 轉一次。
 - 長時間下載時，請讓 `start.bat` 的視窗保持開著，並關掉電腦的自動睡眠。
 
 ## YouTube Premium / 會員 / 年齡限制
