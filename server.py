@@ -1061,6 +1061,37 @@ def api_file(job_id, name):
     return send_file(target, as_attachment=request.args.get("inline") != "1", download_name=target.name)
 
 
+def _explorer_select_cmd(path: Path) -> str:
+    return f'explorer /select,"{path}"'  # Windows 檔名不能含 "，不用跳脫
+
+
+def reveal_in_file_manager(path: Path):
+    """在檔案總管 / Finder 中顯示檔案（選取它）；資料夾則直接打開。"""
+    if os.name == "nt":
+        if path.is_file():
+            # explorer 只認 /select,"路徑" 這種寫法；用 list 傳參數會把整段加引號，路徑有空白時就選不到檔案
+            subprocess.Popen(_explorer_select_cmd(path))
+        else:
+            os.startfile(path)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)] if path.is_file() else ["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path if path.is_dir() else path.parent)])
+
+
+@app.post("/api/jobs/<job_id>/reveal")
+def api_reveal(job_id):
+    """「開啟資料夾」：引擎和使用者在同一台電腦，直接叫出檔案總管，不必再下載一份。"""
+    job = _get_job(job_id)
+    name = str((request.get_json(silent=True) or {}).get("name") or "")
+    base = job.dir.resolve()
+    target = (base / name).resolve() if name else base
+    if not target.exists() or (target != base and base not in target.parents):
+        abort(404)
+    reveal_in_file_manager(target)
+    return jsonify(ok=True)
+
+
 @app.get("/api/jobs/<job_id>/zip")
 def api_zip(job_id):
     job = _get_job(job_id)
@@ -1268,17 +1299,6 @@ def main():
     for stream in (sys.stdout, sys.stderr):  # 主控台編碼不支援的字元（例如影片標題的 emoji）不要讓程式當掉
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
-    if FROZEN:
-        import webbrowser
-        if _port_in_use(HOST, PORT):  # 已經開著（重複點兩下）：直接開網頁
-            print(f"引擎已在執行中，開啟 {url}")
-            if os.environ.get("YTDL_NO_BROWSER") != "1":
-                webbrowser.open(url)
-            return
-        if os.environ.get("YTDL_NO_BROWSER") != "1":
-            threading.Timer(1.5, webbrowser.open, (url,)).start()
-        print("下載器已啟動。使用期間請保持這個視窗開著，關閉視窗就會停止引擎。")
-        print(f"下載的檔案預設存在：{get_download_dir()}")
     startup_update()
     load_jobs()
     threading.Thread(target=periodic_update_check, daemon=True).start()

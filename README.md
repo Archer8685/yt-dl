@@ -33,18 +33,22 @@ GitHub Pages 只能放靜態網頁，**無法執行 yt-dlp**，所以分成兩�
 
 ## 安裝與啟動
 
-### 免安裝版（建議）
+### 桌面 App（建議）
 
-到 [Releases](https://github.com/Archer8685/yt-dl/releases/latest) 下載，已內建 yt-dlp、FFmpeg、Deno，不用裝 Python：
+到 [Releases](https://github.com/Archer8685/yt-dl/releases/latest) 下載。App 已內建 yt-dlp、FFmpeg、Deno，不用裝 Python；介面在自己的視窗裡，不需要另開瀏覽器。
 
-| 系統 | 檔案 | 使用方式 |
+| 系統 | 檔案 | 安裝方式 |
 | --- | --- | --- |
-| Windows | `YT-Downloader-Windows.exe` | 點兩下執行。出現「Windows 已保護您的電腦」時按「其他資訊」→「仍要執行」 |
-| macOS（Apple 晶片） | `YT-Downloader-macOS-AppleSilicon.zip` | 解壓縮後在終端機執行一次 `xattr -dr com.apple.quarantine ~/Downloads/YT-Downloader`，再點兩下開啟 |
+| Windows 10 / 11 | `YT-Downloader-Setup-Windows.exe` | 執行安裝精靈，之後從「開始」功能表或桌面開啟「YT 下載器」。出現「Windows 已保護您的電腦」時，按「其他資訊」→「仍要執行」。解除安裝在「設定 → 應用程式」 |
+| macOS（Apple 晶片） | `YT-Downloader-macOS-AppleSilicon.dmg` | 打開後把「YT 下載器」拖進「應用程式」。第一次被擋下時，到「系統設定 → 隱私權與安全性」按「仍要打開」，或執行一次 `xattr -dr com.apple.quarantine "/Applications/YT 下載器.app"` |
 
-啟動後會自動開啟 http://127.0.0.1:8765。使用期間請保持引擎視窗開著。檔案預設存在「下載」資料夾裡的 `YT-Downloads`，設定與 cookies 存在 `%LOCALAPPDATA%\YT-Downloader`（macOS：`~/Library/Application Support/YT-Downloader`）。
+- 檔案預設存在「下載」資料夾裡的 `YT-Downloads`。
+- 設定、cookies、執行紀錄 `engine.log` 存在 `%LOCALAPPDATA%\YT-Downloader`（macOS：`~/Library/Application Support/YT-Downloader`）。
+- 下載進行中關閉視窗時會先詢問；關掉後，下次開啟按「繼續下載」即可接著下載。
+- 每個下載完成的檔案都有「開啟資料夾」，會直接在檔案總管 / Finder 中顯示。
+- 用 `YT-Downloader --server` 啟動時只執行引擎、不開視窗，可以改用瀏覽器開 http://127.0.0.1:8765。
 
-免安裝版無法自行更新 yt-dlp。GitHub Actions 每天會檢查 yt-dlp 新版並重新打包，網頁出現「下載新版引擎」時，下載新版替換舊版即可。
+App 無法自行更新 yt-dlp。GitHub Actions 每天會檢查 yt-dlp 新版並重新打包；App 裡出現「下載新版引擎」時，下載並安裝新版即可（設定與下載紀錄會保留）。
 
 ### 用 Python 原始碼執行（Linux、Intel Mac、開發用）
 
@@ -62,11 +66,14 @@ start.bat      # Windows
 ### 自己打包
 
 ```bash
-pip install -r requirements.txt pyinstaller
-python build_exe.py      # 產出 dist/YT-Downloader-Windows.exe 或 dist/YT-Downloader-macOS-*.zip
+pip install -r requirements-app.txt
+python build_app.py      # Windows：dist/YT-Downloader-Setup-Windows.exe（需要 Inno Setup 6）；macOS：dist/YT-Downloader-macOS-*.dmg
+python desktop.py        # 開發時直接開 App 視窗
 ```
 
-`build_exe.py` 會下載對應平台的 FFmpeg / ffprobe / Deno 放進執行檔。push 到 `main` 或每天排程時，`.github/workflows/release.yml` 會在 Windows 與 macOS 上打包、做啟動測試，並發布到 Releases（同一份程式碼加同一版 yt-dlp 只發布一次）。
+- `build_app.py` 會下載對應平台的 FFmpeg / ffprobe / Deno 一起打包。
+- App 圖示由 `assets/make_icon.py` 產生（需要 Pillow）。
+- push 到 `main` 或每天排程時，`.github/workflows/release.yml` 會在 Windows 與 macOS 上打包，實際安裝並做啟動測試後發布到 Releases。同一份程式碼加同一版 yt-dlp 只發布一次。
 
 ## yt-dlp 自動更新
 
@@ -87,7 +94,6 @@ YouTube 經常改版，yt-dlp 也跟著頻繁更新。引擎有三層自動更�
 | `YTDL_PARALLEL` | 同時下載數（預設 3） |
 | `YTDL_DOWNLOAD_DIR` | 固定下載位置（設定後網頁上就不能改） |
 | `YTDL_MIN_FREE_GB` | 剩餘空間低於此值就停止下載（預設 2） |
-| `YTDL_NO_BROWSER=1` | 免安裝版啟動時不自動開瀏覽器 |
 
 ## 儲存位置與磁碟空間
 

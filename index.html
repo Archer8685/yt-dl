@@ -357,20 +357,20 @@ footer{margin-top:60px;text-align:center;color:var(--dim);font-size:12px;line-he
 
   <!-- BACKEND SETUP (顯示於連不到後端時，例如從 GitHub Pages 開啟) -->
   <section id="setupCard" class="card section hidden">
-    <h3><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>連線到本機下載引擎</h3>
-    <p class="desc">這個網頁只是操作介面，實際下載由你電腦上的 yt-dlp 引擎執行（GitHub Pages 無法執行 yt-dlp）。第一次使用請先啟動引擎：</p>
+    <h3><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>下載 YT 下載器 App</h3>
+    <p class="desc">下載需要在你的電腦上進行（網頁本身無法執行 yt-dlp）。安裝桌面 App 就能直接使用，已內建 yt-dlp、FFmpeg，不用另外安裝任何東西；裝好後也可以繼續用這個網頁操作。</p>
     <div class="grid g2">
       <div>
-        <div class="label">1. 下載引擎，點兩下執行（免安裝，已內建 FFmpeg）</div>
+        <div class="label">1. 下載並安裝</div>
         <div class="row dl-row">
-          <a class="btn primary" href="https://github.com/Archer8685/yt-dl/releases/latest/download/YT-Downloader-Windows.exe">Windows 版（.exe）</a>
-          <a class="btn" href="https://github.com/Archer8685/yt-dl/releases/latest/download/YT-Downloader-macOS-AppleSilicon.zip">macOS 版（Apple 晶片）</a>
+          <a class="btn primary" href="https://github.com/Archer8685/yt-dl/releases/latest/download/YT-Downloader-Setup-Windows.exe">Windows 10 / 11</a>
+          <a class="btn" href="https://github.com/Archer8685/yt-dl/releases/latest/download/YT-Downloader-macOS-AppleSilicon.dmg">macOS（Apple 晶片）</a>
         </div>
         <p class="desc" style="margin:10px 0 0">
-          Windows 第一次執行若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。<br>
-          macOS 解壓縮後，先在「終端機」執行一次 <span class="mono">xattr -dr com.apple.quarantine ~/Downloads/YT-Downloader</span>，再點兩下開啟。<br>
-          執行後會開一個視窗，使用期間請保持開著。檔案預設存在「下載」資料夾裡的 YT-Downloads。
-          <a href="https://github.com/Archer8685/yt-dl/releases/latest" target="_blank" rel="noopener">所有版本</a>
+          <b>Windows</b>：執行安裝精靈，之後從「開始」功能表開啟「YT 下載器」。若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。<br>
+          <b>macOS</b>：打開 .dmg，把「YT 下載器」拖進「應用程式」。第一次被擋下時，到「系統設定 → 隱私權與安全性」按「仍要打開」；若顯示「已損毀」，在「終端機」執行一次 <span class="mono">xattr -dr com.apple.quarantine "/Applications/YT 下載器.app"</span>。<br>
+          檔案預設存在「下載」資料夾裡的 YT-Downloads。
+          <a href="https://github.com/Archer8685/yt-dl/releases/latest" target="_blank" rel="noopener">所有版本與說明</a>
         </p>
         <details style="margin-top:10px">
           <summary class="desc" style="cursor:pointer">進階：用 Python 原始碼執行（Linux、Intel Mac）</summary>
@@ -382,7 +382,7 @@ start.bat        # Windows
         </details>
       </div>
       <div>
-        <div class="label">2. 引擎位址</div>
+        <div class="label">2. 已安裝 App？開啟後這個網頁會自動連上（或手動輸入位址）</div>
         <div class="row">
           <input class="input mono" id="apiBase" placeholder="http://127.0.0.1:8765">
           <button class="btn primary" id="apiConnect" style="flex:none">連線</button>
@@ -708,7 +708,7 @@ start.bat        # Windows
     </div>
     <div class="offline hidden" id="offline" role="status">
       <b>⚠ 與下載引擎的連線中斷了</b>，下方進度已停止更新，正在自動重新連線…<br>
-      通常是執行引擎的視窗被關閉、電腦睡眠或重開機。重新開啟 <span class="mono">YT-Downloader</span>（或 <span class="mono">start.bat</span>）後，
+      通常是 App 被關閉、電腦睡眠或重開機。重新開啟「YT 下載器」（或 <span class="mono">start.bat</span>）後，
       中斷的工作會出現「繼續下載」，從中斷處接著下載，已下載的部分不會浪費。
     </div>
     <div class="storage" id="storage">
@@ -1303,6 +1303,7 @@ function renderJobs(jobs, logs) {
       ${files.length ? `<div class="files">${files.map(f => {
         const ext = (f.name.split(".").pop() || "").slice(0, 6);
         return `<div class="file"><span class="ext">${esc(ext)}</span><span class="fn" title="${esc(f.name)}">${esc(f.name)}</span><span class="fs">${fmtBytes(f.size)}</span>
+          <button class="btn sm ghost" data-act="reveal" data-name="${esc(f.name)}" title="在檔案總管 / Finder 中顯示">開啟資料夾</button>
           <a class="btn sm" href="${API_BASE}/api/jobs/${j.id}/file/${f.name.split("/").map(encodeURIComponent).join("/")}" download>下載</a></div>`;
       }).join("")}${files.length > 1 ? `<div><a class="btn sm" href="${API_BASE}/api/jobs/${j.id}/zip">全部打包 ZIP</a></div>` : ""}</div>` : ""}
       <div style="margin-top:10px"><button class="btn sm ghost" data-act="log">${openLogs.has(j.id) ? "隱藏紀錄" : "顯示紀錄"}</button></div>
@@ -1323,6 +1324,7 @@ $("#jobs").addEventListener("click", async e => {
       await api(`/api/jobs/${id}`, { method: "DELETE" });
     }
     if (act === "log") openLogs.has(id) ? openLogs.delete(id) : openLogs.add(id);
+    if (act === "reveal") { await api(`/api/jobs/${id}/reveal`, { method: "POST", body: JSON.stringify({ name: b.dataset.name }) }); return; }
   } catch (err) { toast(err.message, "err"); }
   lastJobsSig = ""; refreshJobs();
 });

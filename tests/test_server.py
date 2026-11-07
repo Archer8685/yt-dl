@@ -422,6 +422,30 @@ def test_thumbnail_written_before_a_failure_is_not_progress(fake_ydl, monkeypatc
     assert job.partial_bytes() == 0
 
 
+def test_reveal_opens_file_manager_only_inside_job_dir(client, monkeypatch, tmp_path):
+    opened = []
+    monkeypatch.setattr(server, "reveal_in_file_manager", opened.append)
+    job = server.Job("https://x", {}, "t", job_dir=tmp_path / "j")
+    job.dir.mkdir()
+    (job.dir / "v.mp4").write_bytes(b"x")
+    server.JOBS[job.id] = job
+    try:
+        assert client.post(f"/api/jobs/{job.id}/reveal", json={"name": "v.mp4"}).status_code == 200
+        assert client.post(f"/api/jobs/{job.id}/reveal", json={}).status_code == 200
+        assert client.post(f"/api/jobs/{job.id}/reveal", json={"name": "../../x"}).status_code == 404
+        assert client.post(f"/api/jobs/{job.id}/reveal", json={"name": "nope.mp4"}).status_code == 404
+        assert client.post(f"/api/jobs/{job.id}/reveal", json={"name": "v.mp4"},
+                           headers={"Origin": "https://evil.example"}).status_code == 403
+        assert opened == [(job.dir / "v.mp4").resolve(), job.dir.resolve()]
+    finally:
+        server.JOBS.pop(job.id, None)
+
+
+def test_explorer_select_quotes_only_the_path():
+    p = Path(r"D:\yt dl\Me at the zoo [x].mp4")
+    assert server._explorer_select_cmd(p) == 'explorer /select,"D:\\yt dl\\Me at the zoo [x].mp4"'
+
+
 def test_user_data_dir_is_outside_the_bundle():
     d = server._user_data_dir()
     assert d.name == server.APP_NAME and d.is_absolute()

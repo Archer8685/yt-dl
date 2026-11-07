@@ -1,13 +1,14 @@
-name: Release engine
+name: Release app
 
-# 把引擎打包成免安裝的 Windows .exe 與 macOS 版本，發布到 GitHub Releases。
+# 把下載器打包成桌面 App（Windows 安裝精靈、macOS .dmg），實際安裝後做啟動測試，再發布到 GitHub Releases。
 # - 程式有變更時重建
 # - 每天檢查一次 yt-dlp 新版（YouTube 常改版，打包版無法自行更新，靠重建跟上）
 # 同一份程式碼＋同一版 yt-dlp 只發布一次（tag：engine-<yt-dlp 版本>-<commit>）。
 on:
   push:
     branches: [main]
-    paths: [server.py, index.html, build_exe.py, requirements.txt, .github/workflows/release.yml]
+    paths: [server.py, desktop.py, index.html, build_app.py, requirements.txt, requirements-app.txt, assets/**,
+            .github/workflows/release.yml]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -56,18 +57,32 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: python -m pip install -r requirements.txt pyinstaller pytest
+        run: python -m pip install -r requirements-app.txt pytest
       - name: Test
         run: python -m pytest -q
       - name: Build
-        run: python build_exe.py
-      - name: Smoke test
+        env:
+          YTDL_APP_VERSION: ${{ needs.plan.outputs.tag }}
+        run: python build_app.py
+      - name: Install the built app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Get-Item dist/YT-Downloader-Setup-Windows.exe
+          Start-Process $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/CURRENTUSER","/DIR=$env:RUNNER_TEMP\app","/NORESTART" -Wait
+          "APP_EXE=$env:RUNNER_TEMP\app\YT-Downloader.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Mount the built app (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil attach dist/YT-Downloader-*.dmg -mountpoint /Volumes/ytdl -nobrowse
+          echo "APP_EXE=/Volumes/ytdl/YT 下載器.app/Contents/MacOS/YT-Downloader" >> "$GITHUB_ENV"
+      - name: Smoke test the installed app
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then exe=dist/YT-Downloader.exe; cp dist/YT-Downloader-*.exe "$exe"
-          else (cd dist && unzip -o -q YT-Downloader-*.zip) && exe=dist/YT-Downloader; fi
-          YTDL_PORT=8799 YTDL_NO_BROWSER=1 YTDL_DOWNLOAD_DIR="$RUNNER_TEMP/dl" "$exe" &
-          for i in $(seq 60); do
+          exe="$APP_EXE"
+          if command -v cygpath >/dev/null; then exe=$(cygpath -u "$APP_EXE"); fi  # Windows 路徑轉成 bash 路徑
+          YTDL_PORT=8799 YTDL_DOWNLOAD_DIR="$RUNNER_TEMP/dl" "$exe" --server &
+          for i in $(seq 90); do
             if meta=$(curl -fsS http://127.0.0.1:8799/api/meta); then break; fi; sleep 1
           done
           echo "$meta"
@@ -78,10 +93,10 @@ jobs:
           kill %1 || true
       - uses: actions/upload-artifact@v4
         with:
-          name: engine-${{ matrix.os }}
+          name: app-${{ matrix.os }}
           path: |
-            dist/YT-Downloader-*.exe
-            dist/YT-Downloader-*.zip
+            dist/YT-Downloader-Setup-Windows.exe
+            dist/YT-Downloader-*.dmg
 
   release:
     needs: [plan, build]
@@ -98,19 +113,18 @@ jobs:
           YTDLP: ${{ needs.plan.outputs.ytdlp }}
         run: |
           cat > notes.md <<EOF
-          內含 yt-dlp ${YTDLP}、FFmpeg、Deno，不用另外安裝 Python。
+          YT 下載器桌面 App，內含 yt-dlp ${YTDLP}、FFmpeg、Deno，不用另外安裝任何東西。
 
-          ## Windows
-          下載 **YT-Downloader-Windows.exe**，點兩下執行。
-          第一次執行若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。
+          ## Windows 10 / 11
+          下載 **YT-Downloader-Setup-Windows.exe**，執行安裝精靈；完成後從「開始」功能表或桌面開啟「YT 下載器」。
+          若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。解除安裝：設定 → 應用程式。
 
-          ## macOS（Apple Silicon）
-          下載 **YT-Downloader-macOS-AppleSilicon.zip** 並解壓縮，在「終端機」執行一次：
-          \`xattr -dr com.apple.quarantine ~/Downloads/YT-Downloader\`
-          之後點兩下 YT-Downloader 即可（會開一個終端機視窗，使用期間請保持開著）。
+          ## macOS（Apple 晶片）
+          下載 **YT-Downloader-macOS-AppleSilicon.dmg**，打開後把「YT 下載器」拖進「應用程式」。
+          第一次開啟若被擋下：到「系統設定 → 隱私權與安全性」按「仍要打開」，
+          或在「終端機」執行一次 \`xattr -dr com.apple.quarantine "/Applications/YT 下載器.app"\`。
 
-          啟動後會自動開啟 http://127.0.0.1:8765 ，也可以使用 https://archer8685.github.io/yt-dl/ 。
-          檔案預設存在「下載」資料夾裡的 YT-Downloads，可以在網頁上的「儲存位置」更改。
+          檔案預設存在「下載」資料夾裡的 YT-Downloads，可以在 App 裡的「儲存位置」更改。
           EOF
           gh release create "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "引擎 ${TAG#engine-}" --notes-file notes.md --latest
+            --title "YT 下載器 ${TAG#engine-}" --notes-file notes.md --latest

@@ -1,0 +1,4 @@
+# 打包桌面 App 用（python build_app.py）
+-r requirements.txt
+pywebview>=6.0
+pyinstaller>=6.0
