@@ -103,5 +103,28 @@ def test_file_route_blocks_traversal(client):
         server.JOBS.pop(job.id)
 
 
+def test_job_refuses_to_start_when_disk_is_full(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "get_download_dir", lambda: tmp_path)
+    monkeypatch.setattr(server, "disk_info", lambda p: {"path": str(p), "free": 100 * 1024**2, "total": 10 * 1024**3})
+    job = server.Job("https://www.youtube.com/watch?v=x", {"mode": "audio"}, "t")
+    server.run_job(job)
+    assert job.status == "error"
+    assert job.stage == "磁碟空間不足"
+    assert "空間不足" in job.error
+
+
+def test_settings_reject_relative_and_accept_writable_dir(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "SETTINGS_FILE", tmp_path / "settings.json")
+    monkeypatch.delenv("YTDL_DOWNLOAD_DIR", raising=False)
+    assert client.post("/api/settings", json={"download_dir": "relative/dir"}).status_code == 400
+    target = tmp_path / "dl"
+    r = client.post("/api/settings", json={"download_dir": str(target)})
+    assert r.status_code == 200
+    assert server.get_download_dir() == target.resolve()
+    assert r.get_json()["disk"]["free"] is not None
+    assert client.get("/api/settings").get_json()["drives"] is None
+    assert client.get("/api/settings?drives=1").get_json()["drives"]
+
+
 def test_cookies_upload_rejects_non_netscape(client):
     assert client.post("/api/cookies", json={"text": "hello"}).status_code == 400

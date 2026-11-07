@@ -30,8 +30,36 @@ import yt_dlp
 from yt_dlp.utils import download_range_func, parse_duration
 
 ROOT = Path(__file__).resolve().parent
-DOWNLOAD_DIR = ROOT / "downloads"
-DOWNLOAD_DIR.mkdir(exist_ok=True)
+DEFAULT_DOWNLOAD_DIR = ROOT / "downloads"
+SETTINGS_FILE = ROOT / "settings.json"
+# 剩餘空間低於此值就停止下載，保護系統碟（預設 2 GB）
+MIN_FREE_BYTES = int(float(os.environ.get("YTDL_MIN_FREE_GB", "2")) * 1024**3)
+
+
+def _load_settings() -> dict:
+    try:
+        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def get_download_dir() -> Path:
+    """下載位置：環境變數 > settings.json > 專案內 downloads/。"""
+    raw = os.environ.get("YTDL_DOWNLOAD_DIR") or _load_settings().get("download_dir")
+    d = Path(raw).expanduser() if raw else DEFAULT_DOWNLOAD_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def disk_info(path: Path) -> dict:
+    try:
+        u = shutil.disk_usage(path)
+        return {"path": str(path), "free": u.free, "total": u.total}
+    except OSError:
+        return {"path": str(path), "free": None, "total": None}
+
+
+get_download_dir()  # 啟動時先建立下載資料夾
 COOKIES_FILE = ROOT / "cookies.txt"
 HOST = os.environ.get("YTDL_HOST", "127.0.0.1")
 PORT = int(os.environ.get("YTDL_PORT", "8765"))
@@ -141,6 +169,14 @@ TEMP_SUFFIXES = (".part", ".ytdl", ".temp", ".frag")
 
 class Cancelled(Exception):
     pass
+
+
+class DiskFull(Exception):
+    pass
+
+
+def _gb(n) -> str:
+    return f"{n / 1024**3:.1f} GB" if n is not None else "?"
 
 
 # --------------------------------------------------------------------------- #
@@ -513,7 +549,9 @@ class Job:
         self.url = url
         self.options = options
         self.title = title or url
-        self.dir = DOWNLOAD_DIR / self.id
+        self.dir = get_download_dir() / self.id
+        self.disk_error = None
+        self._disk_checked = 0.0
         self.status = "queued"  # queued / downloading / processing / done / error / cancelled
         self.progress = 0.0
         self.speed = None
@@ -600,6 +638,24 @@ def run_job(job: Job):
             job.finished = time.time()
             return
 
+        def check_disk(total, done):
+            """空間不夠放下這個檔案、或剩餘空間低於保留值時立即停止，避免把磁碟塞爆。"""
+            now = time.time()
+            if now - job._disk_checked < 3:
+                return
+            job._disk_checked = now
+            free = disk_info(job.dir)["free"]
+            if free is None:
+                return
+            need = (total - done) if total else 0
+            if free - need < MIN_FREE_BYTES:
+                job.disk_error = (
+                    f"磁碟空間不足：{job.dir.anchor or job.dir} 只剩 {_gb(free)}"
+                    + (f"，這個檔案還需要約 {_gb(need)}" if need else "")
+                    + f"（保留 {_gb(MIN_FREE_BYTES)} 給系統）。已停止下載，已完成的檔案會保留。"
+                    "請改到空間較大的磁碟（下載佇列上方「儲存位置」），或降低畫質 / 減少清單項目。")
+                raise DiskFull(job.disk_error)
+
         def hook(d):
             if job.cancel_flag.is_set():
                 raise Cancelled()
@@ -607,6 +663,7 @@ def run_job(job: Job):
             if st == "downloading":
                 total = d.get("total_bytes") or d.get("total_bytes_estimate")
                 done = d.get("downloaded_bytes") or 0
+                check_disk(total, done)
                 job.status = "downloading"
                 info = d.get("info_dict") or {}
                 fid = info.get("format_id")
@@ -634,6 +691,11 @@ def run_job(job: Job):
         opts["postprocessor_hooks"] = [pp_hook]
         job.dir.mkdir(parents=True, exist_ok=True)
         try:
+            free = disk_info(job.dir)["free"]
+            if free is not None and free < MIN_FREE_BYTES:
+                job.disk_error = (f"磁碟空間不足：{job.dir.anchor or job.dir} 只剩 {_gb(free)}，未開始下載。"
+                                  "請清出空間或更換儲存位置。")
+                raise DiskFull(job.disk_error)
             with yt_dlp.YoutubeDL(opts) as ydl:
                 code = ydl.download([job.url])
             if job.cancel_flag.is_set():
@@ -644,8 +706,17 @@ def run_job(job: Job):
         except Cancelled:
             job.status, job.stage = "cancelled", "已取消"
         except BaseException as e:  # noqa: BLE001 — yt-dlp 會把 hook 例外包成 DownloadError
+            msg = _clean_err(e)
             if job.cancel_flag.is_set():
                 job.status, job.stage = "cancelled", "已取消"
+            elif job.disk_error or "Errno 28" in msg or "No space left" in msg:
+                kept = len(job.files())
+                job.status, job.stage = "error", "磁碟空間不足"
+                job.error = job.disk_error or (
+                    f"磁碟空間不足（{job.dir.anchor or job.dir} 只剩 {_gb(disk_info(job.dir)['free'])}），下載已停止。"
+                    "請改到空間較大的磁碟（下載佇列上方「儲存位置」），或降低畫質 / 減少清單項目。")
+                if kept:
+                    job.error += f"\n已保留完成的 {kept} 個檔案。"
             elif job.files():
                 # 主檔已下載，只有後製步驟失敗 → 視為完成並附上警告
                 job.status, job.stage, job.progress = "done", "完成（有警告）", 100.0
@@ -671,7 +742,7 @@ def api_download():
         return jsonify(error="網址無效"), 400
     options = data.get("options") or {}
     try:
-        build_opts(options, DOWNLOAD_DIR / "_validate")  # 先驗證，錯誤立刻回報
+        build_opts(options, DEFAULT_DOWNLOAD_DIR / "_validate")  # 先驗證，錯誤立刻回報
     except Exception as e:  # noqa: BLE001
         return jsonify(error=str(e)), 400
     job = Job(url, options, data.get("title"))
@@ -754,8 +825,52 @@ def api_zip(job_id):
 def api_meta():
     return jsonify(version=yt_dlp.version.__version__, latest=latest_version(), channel=CHANNEL,
                    ffmpeg=bool(shutil.which("ffmpeg")), cookies_file=COOKIES_FILE.is_file(),
+                   disk=disk_info(get_download_dir()), min_free=MIN_FREE_BYTES,
                    just_updated=os.environ.get("YTDL_JUST_UPDATED") == "1",
                    update_running=UPDATE_STATE["running"], update_message=UPDATE_STATE["message"])
+
+
+def list_drives() -> list[dict]:
+    """可用磁碟與剩餘空間（Windows 列磁碟代號；其他系統列家目錄所在磁碟）。"""
+    if os.name == "nt":
+        roots = [Path(f"{c}:\\") for c in "CDEFGHIJKLMNOPQRSTUVWXYZ" if os.path.exists(f"{c}:\\")]
+    else:
+        roots = [Path.home()]
+    return [d for d in (disk_info(r) for r in roots) if d["free"] is not None]
+
+
+@app.get("/api/settings")
+def api_settings():
+    d = get_download_dir()
+    return jsonify(download_dir=str(d), default_dir=str(DEFAULT_DOWNLOAD_DIR),
+                   env_locked=bool(os.environ.get("YTDL_DOWNLOAD_DIR")),
+                   min_free=MIN_FREE_BYTES, disk=disk_info(d),
+                   # 列磁碟可能碰到離線的網路磁碟而變慢，只在明確要求時才列
+                   drives=list_drives() if request.args.get("drives") == "1" else None)
+
+
+@app.post("/api/settings")
+def api_settings_save():
+    if os.environ.get("YTDL_DOWNLOAD_DIR"):
+        return jsonify(error="儲存位置由環境變數 YTDL_DOWNLOAD_DIR 指定，無法在網頁修改"), 409
+    raw = str((request.get_json(silent=True) or {}).get("download_dir") or "").strip().strip('"')
+    if not raw:
+        target = DEFAULT_DOWNLOAD_DIR
+    else:
+        target = Path(raw).expanduser()
+        if not target.is_absolute():
+            return jsonify(error="請輸入完整路徑，例如 D:\\Videos\\yt"), 400
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        probe = target / f".ytdl-write-test-{uuid.uuid4().hex[:6]}"
+        probe.write_bytes(b"ok")
+        probe.unlink()
+    except OSError as e:
+        return jsonify(error=f"無法寫入這個資料夾：{e.strerror or e}"), 400
+    settings = _load_settings()
+    settings["download_dir"] = "" if target == DEFAULT_DOWNLOAD_DIR else str(target.resolve())
+    SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    return api_settings()
 
 
 @app.post("/api/update")

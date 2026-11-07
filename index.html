@@ -256,6 +256,15 @@ footer{margin-top:60px;text-align:center;color:var(--dim);font-size:12px;line-he
   .actionbar .btn{flex:1}
   .card{padding:18px}
 }
+/* ---------- storage ---------- */
+.storage{padding:14px 16px;border-radius:var(--r);border:1px solid var(--line);background:rgba(255,255,255,.025);margin-bottom:14px}
+.storage .mono{font-family:var(--mono);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-free{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.st-free.low{color:var(--err);font-weight:600}
+.st-bar{height:5px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:10px}
+.st-bar i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--accent-2),var(--accent));transition:width .4s}
+.st-bar i.low{background:linear-gradient(90deg,#f59e0b,var(--err))}
+
 /* ---------- simple mode presets ---------- */
 .presets{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
 .preset{position:relative;text-align:left;border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));border-radius:var(--r);padding:18px;cursor:pointer;display:flex;flex-direction:column;gap:10px;transition:transform .2s,border-color .2s,box-shadow .25s;overflow:hidden;--mx:50%;--my:50%}
@@ -677,6 +686,26 @@ start.bat        # Windows
     <div class="row" style="margin-bottom:14px">
       <h2 style="margin:0;font-size:20px;letter-spacing:-.02em;flex:1">下載佇列</h2>
       <button class="btn sm ghost" id="clearDone" style="flex:none">清除已完成</button>
+    </div>
+    <div class="storage" id="storage">
+      <div class="row" style="flex-wrap:wrap;gap:10px">
+        <span style="flex:none;color:var(--muted);font-size:12.5px">儲存位置</span>
+        <span class="mono st-path" id="stPath" style="flex:1;min-width:0">—</span>
+        <span class="st-free" id="stFree" style="flex:none"></span>
+        <button class="btn sm" id="stEdit" style="flex:none">變更</button>
+      </div>
+      <div class="st-bar"><i id="stBar"></i></div>
+      <div class="hidden" id="stEditor" style="margin-top:12px">
+        <div class="label">選擇磁碟（會在該磁碟建立 <span class="mono">yt-dl</span> 資料夾）</div>
+        <div class="chips" id="stDrives" style="margin-bottom:10px"></div>
+        <div class="label">或輸入完整路徑</div>
+        <div class="row">
+          <input class="input mono" id="stInput" placeholder="D:\Videos\yt-dl">
+          <button class="btn primary" id="stSave" style="flex:none">套用</button>
+          <button class="btn ghost" id="stDefault" style="flex:none" title="改回專案內的 downloads 資料夾">預設</button>
+        </div>
+        <p class="desc" style="margin:8px 0 0">只影響之後的新下載。剩餘空間低於 <span id="stMin">2 GB</span> 時會自動停止，保護系統碟。</p>
+      </div>
     </div>
     <div id="jobs"><div class="empty">尚無下載工作</div></div>
   </section>
@@ -1234,7 +1263,7 @@ function renderJobs(jobs, logs) {
       ${running ? `<div class="bar ${indet ? "indet" : ""}"><i style="width:${j.progress || 0}%"></i></div>
         <div class="job-sub"><span>${esc(j.stage)}</span>${j.item ? `<span>項目 ${esc(j.item)}</span>` : ""}${j.progress ? `<span>${j.progress.toFixed(1)}%</span>` : ""}
         ${j.total ? `<span>${fmtBytes(j.downloaded)} / ${fmtBytes(j.total)}</span>` : ""}${j.speed ? `<span>${fmtBytes(j.speed)}/s</span>` : ""}${j.eta != null ? `<span>剩 ${fmtDur(j.eta)}</span>` : ""}</div>` : ""}
-      ${j.error ? `<div class="err-box">${esc(j.error)}</div>` : ""}
+      ${j.error ? `<div class="err-box">${esc(j.error)}${j.stage === "磁碟空間不足" ? `<div style="margin-top:8px"><a href="#" class="btn sm open-storage">變更儲存位置</a></div>` : ""}</div>` : ""}
       ${files.length ? `<div class="files">${files.map(f => {
         const ext = (f.name.split(".").pop() || "").slice(0, 6);
         return `<div class="file"><span class="ext">${esc(ext)}</span><span class="fn" title="${esc(f.name)}">${esc(f.name)}</span><span class="fs">${fmtBytes(f.size)}</span>
@@ -1507,10 +1536,55 @@ $("#presets").addEventListener("click", async e => {
   b.disabled = false;
 });
 
+/* ---------------- Storage location / disk space ---------------- */
+const LOW_DISK = 10 * 1024 ** 3;  // 低於 10 GB 顯示紅色警示
+function joinPath(root, name) { return root.replace(/[\\/]+$/, "") + (root.includes("\\") ? "\\" : "/") + name; }
+async function loadStorage(withDrives = false) {
+  try {
+    const s = await api("/api/settings" + (withDrives ? "?drives=1" : ""));
+    const d = s.disk || {};
+    $("#stPath").textContent = s.download_dir; $("#stPath").title = s.download_dir;
+    const low = d.free != null && d.free < LOW_DISK;
+    $("#stFree").textContent = d.free != null ? `剩餘 ${fmtBytes(d.free)} / ${fmtBytes(d.total)}` : "";
+    $("#stFree").classList.toggle("low", low);
+    $("#stBar").style.width = d.total ? `${Math.round((1 - d.free / d.total) * 100)}%` : "0";
+    $("#stBar").classList.toggle("low", low);
+    $("#stMin").textContent = fmtBytes(s.min_free);
+    $("#stEdit").disabled = s.env_locked; $("#stEdit").title = s.env_locked ? "由環境變數 YTDL_DOWNLOAD_DIR 指定" : "";
+    if (s.drives) $("#stDrives").innerHTML = s.drives.map(v => {
+      const target = joinPath(v.path, "yt-dl");
+      const cur = s.download_dir.toLowerCase().startsWith(v.path.toLowerCase());
+      return `<span class="chip ${cur ? "on" : ""}" data-path="${esc(target)}">${esc(v.path)} <small>剩 ${fmtBytes(v.free)}</small>${v.free < LOW_DISK ? ' <small style="color:var(--err)">不足</small>' : ""}</span>`;
+    }).join("");
+    $("#storage").classList.remove("hidden");
+    return s;
+  } catch { $("#storage").classList.add("hidden"); return null; }
+}
+async function saveStorage(path) {
+  try {
+    const s = await api("/api/settings", { method: "POST", body: JSON.stringify({ download_dir: path }) });
+    toast(`之後的下載會存到 ${s.download_dir}`, "ok");
+    $("#stEditor").classList.add("hidden");
+    loadStorage();
+  } catch (err) { toast(err.message, "err"); }
+}
+function openStorageEditor() {
+  $("#stEditor").classList.remove("hidden"); $("#stInput").value = $("#stPath").textContent;
+  $("#stDrives").innerHTML = '<span class="spin"></span>'; loadStorage(true);
+}
+$("#stEdit").addEventListener("click", () => $("#stEditor").classList.contains("hidden") ? openStorageEditor() : $("#stEditor").classList.add("hidden"));
+$("#stDrives").addEventListener("click", e => { const c = e.target.closest(".chip[data-path]"); if (c) saveStorage(c.dataset.path); });
+$("#stSave").addEventListener("click", () => saveStorage($("#stInput").value.trim()));
+$("#stInput").addEventListener("keydown", e => { if (e.key === "Enter") saveStorage($("#stInput").value.trim()); });
+$("#stDefault").addEventListener("click", () => saveStorage(""));
+document.addEventListener("click", e => { if (e.target.closest(".open-storage")) { e.preventDefault(); openStorageEditor(); $("#storage").scrollIntoView({ behavior: "smooth", block: "center" }); } });
+
 loadPrefs();
 renderQuality();
 applyMode();
 renderAuthStatus();
+loadStorage();
+setInterval(() => { if (!document.hidden) loadStorage(); }, 15000);
 setUi(UI);
 refreshJobs();
 loadMeta();

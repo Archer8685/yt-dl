@@ -5,3 +5,4 @@ cookies.txt
 *.part
 *.ytdl
 .claude/
+settings.json
