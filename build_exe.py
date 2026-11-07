@@ -115,6 +115,8 @@ def build(label: str) -> Path:
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):  # CI 的 Windows 主控台是 cp1252，印中文會當掉
+        stream.reconfigure(encoding="utf-8", errors="replace")
     label = fetch_tools()
     check_tools()
     out = build(label)

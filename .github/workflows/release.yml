@@ -73,7 +73,8 @@ jobs:
           echo "$meta"
           echo "$meta" | grep -q '"frozen":true'
           echo "$meta" | grep -q '"ffmpeg":true'
-          curl -fsS http://127.0.0.1:8799/ | grep -q "<html"
+          page=$(curl -fsS http://127.0.0.1:8799/)
+          grep -q "<html" <<< "$page"
           kill %1 || true
       - uses: actions/upload-artifact@v4
         with:
