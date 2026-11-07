@@ -35,7 +35,7 @@ DENO = "https://github.com/denoland/deno/releases/latest/download/deno-{triple}.
 FFMPEG_WIN = ("https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/"
               "ffmpeg-master-latest-win64-gpl-shared.zip")
 FFMPEG_MAC = "https://ffmpeg.martin-riedl.de/redirect/latest/macos/{arch}/release/{tool}.zip"
-INNO_ZH = "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseTraditional.isl"
+INNO_ZH = "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseTraditional.isl"
 ISCC_PATHS = [r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe", r"C:\Program Files\Inno Setup 6\ISCC.exe"]
 
 
@@ -174,7 +174,9 @@ def windows_installer() -> Path | None:
     if not iscc:
         print("找不到 Inno Setup 6（ISCC.exe），略過安裝程式；App 在 dist/YT-Downloader/")
         return None
-    lang = download(INNO_ZH, VENDOR / "ChineseTraditional.isl")
+    # 新版 Inno Setup 已內建繁體中文；舊版沒有時才從官方 repo 下載
+    bundled = Path(iscc).parent / "Languages" / "ChineseTraditional.isl"
+    lang = bundled if bundled.exists() else download(INNO_ZH, VENDOR / "ChineseTraditional.isl")
     iss = BUILD / "installer.iss"
     # Inno Setup 需要 UTF-8 BOM 才會把中文當 UTF-8 讀
     iss.write_text(INNO_SCRIPT.format(display=DISPLAY, name=NAME, version=VERSION, dist=DIST,
