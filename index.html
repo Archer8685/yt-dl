@@ -214,7 +214,8 @@ tr.sel .selbox::after{content:"";width:6px;height:6px;border-radius:2px;backgrou
 
 /* ---------- jobs ---------- */
 .job{padding:16px 18px;border-radius:var(--r);border:1px solid var(--line);background:rgba(255,255,255,.025);margin-bottom:12px}
-.job-top{display:flex;align-items:center;gap:12px}
+.job-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+@media (max-width:600px){.job-top .job-title{flex-basis:100%}}
 .job-title{flex:1;min-width:0;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .status{font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line-2);color:var(--muted);flex:none}
 .status.done{color:var(--ok);border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.08)}
@@ -231,6 +232,10 @@ tr.sel .selbox::after{content:"";width:6px;height:6px;border-radius:2px;backgrou
 .file .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file .fs{color:var(--dim);font-family:var(--mono);font-size:11.5px}
 .ext{font-family:var(--mono);font-size:10.5px;padding:2px 6px;border-radius:5px;background:rgba(139,92,246,.18);color:#c4b5fd;text-transform:uppercase}
+.offline{margin-bottom:14px;padding:12px 14px;border-radius:12px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.35);color:#fde68a;font-size:13px;line-height:1.6}
+.offline b{color:#fef3c7}
+.job.stale{opacity:.55}
+.job.stale .bar i{animation:none}
 .err-box{margin-top:10px;padding:10px 12px;border-radius:9px;background:rgba(248,113,113,.07);border:1px solid rgba(248,113,113,.25);color:#fecaca;font-size:12.5px;white-space:pre-wrap;word-break:break-word}
 pre.log{margin:10px 0 0;max-height:220px;overflow:auto;padding:10px 12px;border-radius:9px;background:rgba(0,0,0,.45);border:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:#b8b1cc;white-space:pre-wrap;word-break:break-all}
 .empty{text-align:center;color:var(--dim);font-size:13px;padding:26px 0}
@@ -686,6 +691,11 @@ start.bat        # Windows
     <div class="row" style="margin-bottom:14px">
       <h2 style="margin:0;font-size:20px;letter-spacing:-.02em;flex:1">下載佇列</h2>
       <button class="btn sm ghost" id="clearDone" style="flex:none">清除已完成</button>
+    </div>
+    <div class="offline hidden" id="offline" role="status">
+      <b>⚠ 與下載引擎的連線中斷了</b>，下方進度已停止更新，正在自動重新連線…<br>
+      通常是執行引擎的視窗被關閉、電腦睡眠或重開機。重新執行 <span class="mono">start.bat</span> 後，
+      中斷的工作會出現「繼續下載」，從中斷處接著下載，已下載的部分不會浪費。
     </div>
     <div class="storage" id="storage">
       <div class="row" style="flex-wrap:wrap;gap:10px">
@@ -1233,11 +1243,20 @@ async function startDownload(o) {
 }
 
 const openLogs = new Set();
-let jobsTimer = null, lastJobsSig = "";
+let jobsTimer = null, lastJobsSig = "", jobsFails = 0;
+function setOffline(off) {
+  // 連續兩次失敗才顯示，避免單次逾時造成閃爍；斷線時把進行中的工作標成停滯，而不是假裝還在跑
+  $("#offline").classList.toggle("hidden", !off);
+  $$("#jobs .job.running").forEach(el => el.classList.toggle("stale", off));
+}
 async function refreshJobs() {
   clearTimeout(jobsTimer);
   let jobs = [];
-  try { jobs = await api("/api/jobs"); } catch { jobsTimer = setTimeout(refreshJobs, 3000); return; }
+  try { jobs = await api("/api/jobs", { signal: AbortSignal.timeout(10000) }); } catch {
+    if (++jobsFails >= 2) setOffline(true);
+    jobsTimer = setTimeout(refreshJobs, 3000); return;
+  }
+  if (jobsFails) { jobsFails = 0; setOffline(false); lastJobsSig = ""; }
   const active = jobs.some(j => ["queued", "downloading", "processing"].includes(j.status));
   const logs = {};
   await Promise.all([...openLogs].filter(id => jobs.some(j => j.id === id)).map(async id => { try { logs[id] = (await api(`/api/jobs/${id}`)).log; } catch {} }));
@@ -1254,11 +1273,14 @@ function renderJobs(jobs, logs) {
     const running = ["queued", "downloading", "processing"].includes(j.status);
     const indet = running && (j.status === "processing" || j.status === "queued" || !j.progress);
     const files = j.files || [];
-    return `<div class="job" data-id="${j.id}">
+    const resume = j.status === "error"
+      ? `<button class="btn sm primary" data-act="resume" title="${j.partial ? "從中斷處接著下載" : "用相同設定重新下載"}">${j.partial ? `繼續下載（已下載 ${fmtBytes(j.partial)}）` : "重試"}</button>` : "";
+    return `<div class="job${running ? " running" : ""}" data-id="${j.id}">
       <div class="job-top">
         <span class="job-title" title="${esc(j.title)}">${esc(j.title)}</span>
-        <span class="status ${j.status}">${ST[j.status] || j.status}</span>
-        ${running ? `<button class="btn sm danger" data-act="cancel">取消</button>` : `<button class="btn sm ghost danger" data-act="delete" title="刪除工作與檔案">刪除</button>`}
+        <span class="status ${j.status}">${j.stage === "已中斷" ? "已中斷" : ST[j.status] || j.status}</span>
+        ${resume}
+        ${running ? `<button class="btn sm danger" data-act="cancel">取消</button>` : `<button class="btn sm ghost danger" data-act="delete" data-partial="${j.partial || 0}" title="刪除工作與檔案${j.partial ? "（含已下載的暫存資料）" : ""}">刪除</button>`}
       </div>
       ${running ? `<div class="bar ${indet ? "indet" : ""}"><i style="width:${j.progress || 0}%"></i></div>
         <div class="job-sub"><span>${esc(j.stage)}</span>${j.item ? `<span>項目 ${esc(j.item)}</span>` : ""}${j.progress ? `<span>${j.progress.toFixed(1)}%</span>` : ""}
@@ -1280,14 +1302,20 @@ $("#jobs").addEventListener("click", async e => {
   const id = b.closest(".job").dataset.id, act = b.dataset.act;
   try {
     if (act === "cancel") await api(`/api/jobs/${id}/cancel`, { method: "POST" });
-    if (act === "delete") await api(`/api/jobs/${id}`, { method: "DELETE" });
+    if (act === "resume") { await api(`/api/jobs/${id}/resume`, { method: "POST" }); toast("已重新加入佇列", "ok"); }
+    if (act === "delete") {
+      const part = +b.dataset.partial || 0;
+      if (part && !confirm(`這個工作已下載 ${fmtBytes(part)}，刪除後就無法續傳。確定刪除？`)) return;
+      await api(`/api/jobs/${id}`, { method: "DELETE" });
+    }
     if (act === "log") openLogs.has(id) ? openLogs.delete(id) : openLogs.add(id);
   } catch (err) { toast(err.message, "err"); }
   lastJobsSig = ""; refreshJobs();
 });
 $("#clearDone").addEventListener("click", async () => {
   const jobs = await api("/api/jobs").catch(() => []);
-  await Promise.all(jobs.filter(j => ["done", "error", "cancelled"].includes(j.status)).map(j => api(`/api/jobs/${j.id}`, { method: "DELETE" }).catch(() => {})));
+  // 可續傳的中斷工作不清除，避免把已下載的大量暫存資料一起刪掉
+  await Promise.all(jobs.filter(j => ["done", "error", "cancelled"].includes(j.status) && !j.partial).map(j => api(`/api/jobs/${j.id}`, { method: "DELETE" }).catch(() => {})));
   lastJobsSig = ""; refreshJobs();
 });
 

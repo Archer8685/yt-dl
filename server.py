@@ -24,9 +24,8 @@ import zipfile
 from collections import deque
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_file, send_from_directory
-
 import yt_dlp
+from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from yt_dlp.utils import download_range_func, parse_duration
 
 ROOT = Path(__file__).resolve().parent
@@ -126,7 +125,7 @@ def latest_version(force=False) -> str | None:
         if CHANNEL == "nightly":
             versions += list(data.get("releases", {}).keys())
         _LATEST["version"] = max(versions, key=_vtuple)
-    except Exception:  # noqa: BLE001 — 離線時忽略
+    except Exception:  # noqa: BLE001, S110 — 離線時忽略
         pass
     _LATEST["checked"] = time.time()
     return _LATEST["version"]
@@ -137,7 +136,7 @@ def pip_upgrade() -> tuple[bool, str]:
     if CHANNEL == "nightly":
         cmd.insert(4, "--pre")
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
         return p.returncode == 0, (p.stdout + p.stderr)[-800:]
     except Exception as e:  # noqa: BLE001
         return False, str(e)
@@ -543,13 +542,21 @@ def build_opts(o: dict, job_dir: Path) -> dict:
 # --------------------------------------------------------------------------- #
 #  下載工作
 # --------------------------------------------------------------------------- #
+JOB_META = "job.json"  # 每個工作資料夾內的工作紀錄，引擎重啟後用來恢復佇列與續傳
+ACTIVE = ("queued", "downloading", "processing")
+ST_FALLBACK = {"done": "完成", "error": "失敗", "cancelled": "已取消"}
+AUTO_RESUME = 3  # 下載途中斷線時自動續傳的次數（每次都會重新取得串流網址）
+RESUME_DELAY = 5
+
+
 class Job:
-    def __init__(self, url: str, options: dict, title: str | None):
-        self.id = uuid.uuid4().hex[:12]
+    def __init__(self, url: str, options: dict, title: str | None,
+                 job_id: str | None = None, job_dir: Path | None = None):
+        self.id = job_id or uuid.uuid4().hex[:12]
         self.url = url
         self.options = options
         self.title = title or url
-        self.dir = get_download_dir() / self.id
+        self.dir = job_dir or get_download_dir() / self.id
         self.disk_error = None
         self._disk_checked = 0.0
         self.status = "queued"  # queued / downloading / processing / done / error / cancelled
@@ -573,10 +580,24 @@ class Job:
         for p in sorted(self.dir.rglob("*")):
             if not p.is_file() or ".tmp" in p.relative_to(self.dir).parts:
                 continue
-            if p.name.endswith(TEMP_SUFFIXES):
+            if p.name.endswith(TEMP_SUFFIXES) or p.name in (JOB_META, JOB_META + ".tmp"):
                 continue
             out.append({"name": p.relative_to(self.dir).as_posix(), "size": p.stat().st_size})
         return out
+
+    def partial_bytes(self) -> int:
+        """尚未完成、可續傳的暫存資料大小。"""
+        tmp = self.dir / ".tmp"
+        if not tmp.exists():
+            return 0
+        total = 0
+        for p in tmp.rglob("*"):
+            try:
+                if p.is_file() and ".part" in p.name:
+                    total += p.stat().st_size
+            except OSError:
+                pass
+        return total
 
     def to_dict(self, with_log=False):
         d = {k: getattr(self, k) for k in ("id", "url", "title", "status", "progress", "speed", "eta",
@@ -584,14 +605,63 @@ class Job:
         d["mode"] = self.options.get("mode")
         if self.status in ("done", "error", "cancelled"):
             d["files"] = self.files()
+        if self.status == "error":
+            d["partial"] = self.partial_bytes()
         if with_log:
             d["log"] = list(self.log)
         return d
+
+    def save(self):
+        """寫入 job.json（原子寫入），引擎被關掉後重開仍能接續。"""
+        data = {k: getattr(self, k) for k in ("id", "url", "options", "title", "status", "stage",
+                                              "error", "progress", "created", "finished")}
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            tmp = self.dir / (JOB_META + ".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, self.dir / JOB_META)
+        except OSError:
+            pass
+
+    @classmethod
+    def load(cls, meta: Path) -> Job:
+        d = json.loads(meta.read_text(encoding="utf-8"))
+        job = cls(d["url"], d.get("options") or {}, d.get("title"), job_id=meta.parent.name, job_dir=meta.parent)
+        job.created = d.get("created") or meta.stat().st_mtime
+        job.finished = d.get("finished")
+        job.progress = d.get("progress") or 0.0
+        if d.get("status") in ACTIVE:
+            # 上次引擎在下載途中被關閉（關掉視窗、重開機、當機）
+            part = job.partial_bytes()
+            job.status, job.stage = "error", "已中斷"
+            job.error = ("下載引擎在下載途中被關閉，工作已中斷。按「繼續下載」會從中斷處接著下載"
+                         + (f"（已下載 {_gb(part)}）。" if part else "。"))
+            job.finished = job.finished or time.time()
+        else:
+            job.status = d.get("status") or "error"
+            job.stage = d.get("stage") or ST_FALLBACK.get(job.status, "")
+            job.error = d.get("error")
+        return job
 
 
 JOBS: dict[str, Job] = {}
 JOBS_LOCK = threading.Lock()
 MAX_PARALLEL = threading.Semaphore(int(os.environ.get("YTDL_PARALLEL", "3")))
+
+
+def load_jobs():
+    """引擎啟動時從下載資料夾恢復之前的工作（含被中斷、可續傳的）。"""
+    roots = {get_download_dir().resolve(), DEFAULT_DOWNLOAD_DIR.resolve()}
+    for root in roots:
+        for meta in root.glob(f"*/{JOB_META}"):
+            try:
+                job = Job.load(meta)
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            with JOBS_LOCK:
+                JOBS.setdefault(job.id, job)
+            if job.stage == "已中斷":
+                job.save()
 
 
 class JobLogger:
@@ -690,14 +760,33 @@ def run_job(job: Job):
         opts["progress_hooks"] = [hook]
         opts["postprocessor_hooks"] = [pp_hook]
         job.dir.mkdir(parents=True, exist_ok=True)
+        job.save()
         try:
             free = disk_info(job.dir)["free"]
             if free is not None and free < MIN_FREE_BYTES:
                 job.disk_error = (f"磁碟空間不足：{job.dir.anchor or job.dir} 只剩 {_gb(free)}，未開始下載。"
                                   "請清出空間或更換儲存位置。")
                 raise DiskFull(job.disk_error)
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                code = ydl.download([job.url])
+            attempt = 0
+            while True:
+                before = job.partial_bytes()
+                try:
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        code = ydl.download([job.url])
+                    break
+                except Exception as e:
+                    # 大檔案下載數小時，常遇到網路中斷或串流網址過期（HTTP 403）。
+                    # 這一輪確實有下載到資料才重新解析網址、從中斷處續傳；沒進度的錯誤（格式不存在等）直接回報。
+                    msg = _clean_err(e)
+                    if (job.cancel_flag.is_set() or job.disk_error or _is_disk_err(msg)
+                            or attempt >= AUTO_RESUME or job.partial_bytes() <= before):
+                        raise
+                    attempt += 1
+                    job.log.append(f"⟳ 下載中斷：{msg}")
+                    job.log.append(f"⟳ {RESUME_DELAY} 秒後自動續傳（第 {attempt}/{AUTO_RESUME} 次）")
+                    job.status, job.stage, job.speed, job.eta = "downloading", f"重新連線中（{attempt}/{AUTO_RESUME}）", None, None
+                    if job.cancel_flag.wait(RESUME_DELAY):
+                        raise Cancelled() from None
             if job.cancel_flag.is_set():
                 raise Cancelled()
             if code and not job.files():
@@ -709,7 +798,7 @@ def run_job(job: Job):
             msg = _clean_err(e)
             if job.cancel_flag.is_set():
                 job.status, job.stage = "cancelled", "已取消"
-            elif job.disk_error or "Errno 28" in msg or "No space left" in msg:
+            elif job.disk_error or _is_disk_err(msg):
                 kept = len(job.files())
                 job.status, job.stage = "error", "磁碟空間不足"
                 job.error = job.disk_error or (
@@ -724,9 +813,16 @@ def run_job(job: Job):
             else:
                 job.status, job.error, job.stage = "error", _clean_err(e), "失敗"
         finally:
-            shutil.rmtree(job.dir / ".tmp", ignore_errors=True)
+            # 失敗時保留 .tmp 裡的暫存檔，才能按「繼續下載」從中斷處接著下載
+            if job.status != "error":
+                shutil.rmtree(job.dir / ".tmp", ignore_errors=True)
             job.speed = job.eta = None
             job.finished = time.time()
+            job.save()
+
+
+def _is_disk_err(msg: str) -> bool:
+    return "Errno 28" in msg or "No space left" in msg
 
 
 def _clean_err(e: BaseException) -> str:
@@ -748,6 +844,7 @@ def api_download():
     job = Job(url, options, data.get("title"))
     with JOBS_LOCK:
         JOBS[job.id] = job
+    job.save()
     threading.Thread(target=run_job, args=(job,), daemon=True).start()
     return jsonify(job.to_dict())
 
@@ -755,7 +852,7 @@ def api_download():
 def _busy() -> bool:
     with JOBS_LOCK:
         jobs = list(JOBS.values())
-    return any(j.status in ("queued", "downloading", "processing") for j in jobs)
+    return any(j.status in ACTIVE for j in jobs)
 
 
 def _get_job(job_id: str) -> Job:
@@ -786,10 +883,32 @@ def api_cancel(job_id):
     return jsonify(job.to_dict())
 
 
+@app.post("/api/jobs/<job_id>/resume")
+def api_resume(job_id):
+    """失敗或中斷的工作用同一個資料夾重跑；yt-dlp 會偵測 .part 從中斷處續傳。"""
+    job = _get_job(job_id)
+    with JOBS_LOCK:
+        if job.status != "error":
+            return jsonify(error="只有失敗或中斷的工作可以繼續"), 409
+        job.status, job.stage, job.error, job.disk_error = "queued", "排隊中", None, None
+        job.speed = job.eta = job.finished = None
+        job.cancel_flag.clear()
+        # 沒有可續傳資料也沒有完成檔時，改用目前的儲存位置（例如磁碟滿了、換到別顆磁碟後重試）
+        if not job.partial_bytes() and not job.files():
+            new_dir = get_download_dir() / job.id
+            if new_dir != job.dir:
+                shutil.rmtree(job.dir, ignore_errors=True)
+                job.dir = new_dir
+    job.log.append("⟳ 繼續下載")
+    job.save()
+    threading.Thread(target=run_job, args=(job,), daemon=True).start()
+    return jsonify(job.to_dict())
+
+
 @app.delete("/api/jobs/<job_id>")
 def api_delete(job_id):
     job = _get_job(job_id)
-    if job.status in ("queued", "downloading", "processing"):
+    if job.status in ACTIVE:
         return jsonify(error="工作進行中，請先取消"), 409
     shutil.rmtree(job.dir, ignore_errors=True)
     with JOBS_LOCK:
@@ -1000,6 +1119,7 @@ def index():
 
 if __name__ == "__main__":
     startup_update()
+    load_jobs()
     threading.Thread(target=periodic_update_check, daemon=True).start()
     print(f"YT 下載器： http://{HOST}:{PORT}   （yt-dlp {yt_dlp.version.__version__}）")
     app.run(host=HOST, port=PORT, threaded=True, debug=False)

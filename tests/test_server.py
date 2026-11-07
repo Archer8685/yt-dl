@@ -126,5 +126,117 @@ def test_settings_reject_relative_and_accept_writable_dir(client, monkeypatch, t
     assert client.get("/api/settings?drives=1").get_json()["drives"]
 
 
+class FakeYDL:
+    """模擬 yt-dlp：前 fail_times 次寫出一段 .part 後斷線，之後完成並產出成品。"""
+    calls = 0
+    fail_times = 1
+
+    def __init__(self, opts):
+        self.home = Path(opts["paths"]["home"])
+        self.tmp = Path(opts["paths"]["temp"])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def download(self, urls):
+        FakeYDL.calls += 1
+        self.tmp.mkdir(parents=True, exist_ok=True)
+        part = self.tmp / "big.f401.mp4.part"
+        with part.open("ab") as f:
+            f.write(b"x" * 1024)
+        if FakeYDL.calls <= FakeYDL.fail_times:
+            raise server.yt_dlp.utils.DownloadError("ERROR: unable to download video data: HTTP Error 403: Forbidden")
+        part.unlink()
+        (self.home / "big.mp4").write_bytes(b"done")
+        return 0
+
+
+@pytest.fixture
+def fake_ydl(monkeypatch, tmp_path):
+    FakeYDL.calls = 0
+    monkeypatch.setattr(server.yt_dlp, "YoutubeDL", FakeYDL)
+    monkeypatch.setattr(server, "RESUME_DELAY", 0)
+    monkeypatch.setattr(server, "get_download_dir", lambda: tmp_path)
+    return FakeYDL
+
+
+def test_dropped_download_auto_resumes(fake_ydl):
+    fake_ydl.fail_times = 2
+    job = server.Job("https://www.youtube.com/watch?v=x", {"mode": "av"}, "t")
+    server.run_job(job)
+    assert fake_ydl.calls == 3
+    assert job.status == "done"
+    assert any("自動續傳" in line for line in job.log)
+
+
+def test_failed_download_keeps_partial_and_can_resume(fake_ydl, client):
+    fake_ydl.fail_times = server.AUTO_RESUME + 1
+    job = server.Job("https://www.youtube.com/watch?v=x", {"mode": "av"}, "t")
+    server.JOBS[job.id] = job
+    try:
+        server.run_job(job)
+        assert job.status == "error"
+        assert job.partial_bytes() > 0, "失敗時不能刪掉暫存檔"
+        listed = next(j for j in client.get("/api/jobs").get_json() if j["id"] == job.id)
+        assert listed["partial"] > 0
+        fake_ydl.fail_times = 0
+        assert client.post(f"/api/jobs/{job.id}/resume").status_code == 200
+        assert client.post(f"/api/jobs/{job.id}/resume").status_code == 409  # 已在跑，不能重複
+        for _ in range(100):
+            if job.status == "done":
+                break
+            server.time.sleep(0.02)
+        assert job.status == "done"
+        assert [f["name"] for f in job.files()] == ["big.mp4"]  # job.json 不會出現在檔案列表
+    finally:
+        server.JOBS.pop(job.id, None)
+
+
+def test_error_without_new_data_is_not_retried(fake_ydl, monkeypatch):
+    def no_progress(self, urls):
+        FakeYDL.calls += 1
+        raise server.yt_dlp.utils.DownloadError("ERROR: Requested format is not available")
+    monkeypatch.setattr(FakeYDL, "download", no_progress)
+    job = server.Job("https://www.youtube.com/watch?v=x", {"mode": "av"}, "t")
+    (job.dir / ".tmp").mkdir(parents=True)
+    (job.dir / ".tmp" / "old.part").write_bytes(b"x")  # 上次留下的暫存檔
+    server.run_job(job)
+    assert fake_ydl.calls == 1
+    assert job.status == "error"
+
+
+def test_resume_without_partial_moves_to_new_storage(client, tmp_path, monkeypatch):
+    old, new = tmp_path / "c", tmp_path / "d"
+    job = server.Job("https://x", {"mode": "av"}, "t", job_dir=old / "abc")
+    job.status = "error"
+    job.dir.mkdir(parents=True)
+    server.JOBS[job.id] = job
+    monkeypatch.setattr(server, "get_download_dir", lambda: new)
+    monkeypatch.setattr(server, "run_job", lambda j: None)
+    try:
+        assert client.post(f"/api/jobs/{job.id}/resume").status_code == 200
+        assert job.dir == new / job.id
+        assert not (old / "abc").exists()
+    finally:
+        server.JOBS.pop(job.id, None)
+
+
+def test_interrupted_job_is_restored_after_restart(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "get_download_dir", lambda: tmp_path)
+    job = server.Job("https://www.youtube.com/watch?v=x", {"mode": "av"}, "長影片")
+    job.status = "downloading"
+    (job.dir / ".tmp").mkdir(parents=True)
+    (job.dir / ".tmp" / "a.mp4.part").write_bytes(b"x" * 2048)
+    job.save()
+    restored = server.Job.load(job.dir / server.JOB_META)
+    assert restored.id == job.id and restored.dir == job.dir
+    assert restored.status == "error" and restored.stage == "已中斷"
+    assert restored.options == {"mode": "av"} and restored.title == "長影片"
+    assert restored.partial_bytes() == 2048
+
+
 def test_cookies_upload_rejects_non_netscape(client):
     assert client.post("/api/cookies", json={"text": "hello"}).status_code == 400
