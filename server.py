@@ -18,18 +18,16 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
 import uuid
 import zipfile
 from collections import deque
 from pathlib import Path
 
-import yt_dlp
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
-from yt_dlp.utils import download_range_func, parse_duration, prepend_extension
+
+import ytdlp_update
 
 APP_NAME = "YT-Downloader"
-RELEASES_URL = "https://github.com/Archer8685/yt-dl/releases/latest"
 # PyInstaller 打包版（.exe / macOS）：程式本身解壓在暫存資料夾，設定與 cookies 改存使用者資料夾
 FROZEN = bool(getattr(sys, "frozen", False))
 BUNDLE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -53,6 +51,19 @@ else:
     ROOT = BUNDLE
     DEFAULT_DOWNLOAD_DIR = ROOT / "downloads"
 ROOT.mkdir(parents=True, exist_ok=True)
+
+# 打包版：使用者資料夾裡若有自動更新下載的較新 yt-dlp，優先載入；載入失敗就退回內建版本
+YTDLP_OVERLAY = ytdlp_update.activate(ROOT, BUNDLE) if FROZEN else None
+try:
+    import yt_dlp
+except Exception:
+    if not YTDLP_OVERLAY:
+        raise
+    ytdlp_update.fallback(ROOT)
+    YTDLP_OVERLAY = None
+    import yt_dlp
+from yt_dlp.utils import download_range_func, parse_duration, prepend_extension
+
 SETTINGS_FILE = ROOT / "settings.json"
 # 剩餘空間低於此值就停止下載，保護系統碟（預設 2 GB）
 MIN_FREE_BYTES = int(float(os.environ.get("YTDL_MIN_FREE_GB", "2")) * 1024**3)
@@ -129,45 +140,61 @@ def _cors_headers(resp):
 # --------------------------------------------------------------------------- #
 #  yt-dlp 自動更新
 # --------------------------------------------------------------------------- #
-_LATEST = {"version": None, "checked": 0.0}
-UPDATE_STATE = {"running": False, "message": None}
-
-
-def _vtuple(v: str | None):
-    return tuple(int(x) for x in re.findall(r"\d+", v or "0"))
-
-
-RELEASES_API = "https://api.github.com/repos/Archer8685/yt-dl/releases/latest"
-
-
-def _release_ytdlp_version(tag: str) -> str | None:
-    """Releases 的 tag 是 engine-<yt-dlp 版本>-<commit>。"""
-    m = re.fullmatch(r"engine-(\d+(?:\.\d+)+)-\w+", tag or "")
-    return m.group(1) if m else None
+_LATEST = {"version": None, "data": None, "checked": 0.0}
+# ready：打包版已下載好、重新啟動後就會使用的 yt-dlp 版本
+UPDATE_STATE = {"running": False, "message": None, "ready": None}
+_vtuple = ytdlp_update.vtuple
 
 
 def latest_version(force=False) -> str | None:
-    """最新可用的 yt-dlp 版本（快取 6 小時）。
-    原始碼版查 PyPI（nightly 頻道包含 pre-release）；打包版查 GitHub Releases 已打包好的版本，
-    避免 PyPI 剛出新版、Releases 還沒重建時，叫使用者去下載其實還是舊版的檔案。"""
+    """PyPI 上最新的 yt-dlp 版本（快取 6 小時；nightly 頻道包含 pre-release）。"""
     if not force and time.time() - _LATEST["checked"] < 6 * 3600:
         return _LATEST["version"]
     try:
-        if FROZEN:
-            req = urllib.request.Request(RELEASES_API, headers={"Accept": "application/vnd.github+json"})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                _LATEST["version"] = _release_ytdlp_version(json.load(r).get("tag_name"))
-        else:
-            with urllib.request.urlopen("https://pypi.org/pypi/yt-dlp/json", timeout=8) as r:
-                data = json.load(r)
-            versions = [data["info"]["version"]]
-            if CHANNEL == "nightly":
-                versions += list(data.get("releases", {}).keys())
-            _LATEST["version"] = max(versions, key=_vtuple)
+        _LATEST["version"], _LATEST["data"] = ytdlp_update.latest(CHANNEL)
     except Exception:  # noqa: BLE001, S110 — 離線時忽略
         pass
     _LATEST["checked"] = time.time()
     return _LATEST["version"]
+
+
+def _verify_ytdlp(path: Path) -> bool:
+    """在另一個程序實際載入新版 yt-dlp，確認能用才切換（打包版用 App 本身的 --check-ytdlp）。"""
+    cmd = [sys.executable] if FROZEN else [sys.executable, str(BUNDLE / "desktop.py")]
+    try:
+        p = subprocess.run([*cmd, "--check-ytdlp", str(path)], capture_output=True, timeout=120, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return p.returncode == 0 and (path / "OK").is_file()
+
+
+_UPGRADE_LOCK = threading.Lock()  # 背景自動更新與手動「更新」不能同時寫同一個暫存資料夾
+
+
+def app_upgrade() -> tuple[bool, str]:
+    """打包版沒有 pip：從 PyPI 下載新版 yt-dlp 放到使用者資料夾，重新啟動後生效。"""
+    with _UPGRADE_LOCK:
+        return _app_upgrade()
+
+
+def _app_upgrade() -> tuple[bool, str]:
+    latest = latest_version(force=True)
+    if not latest or not _LATEST["data"]:
+        return False, "無法連線到 PyPI"
+    if _vtuple(latest) <= _vtuple(UPDATE_STATE["ready"] or yt_dlp.version.__version__):
+        return True, "已是最新版"
+    try:
+        ytdlp_update.install(ROOT, latest, _LATEST["data"], _verify_ytdlp)
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+    UPDATE_STATE["ready"] = latest
+    keep = {latest} | ({YTDLP_OVERLAY} if YTDLP_OVERLAY else set())
+    ytdlp_update.cleanup(ROOT, keep)
+    return True, f"yt-dlp {latest} 已下載，重新啟動後套用"
+
+
+def upgrade() -> tuple[bool, str]:
+    return app_upgrade() if FROZEN else pip_upgrade()
 
 
 def pip_upgrade() -> tuple[bool, str]:
@@ -184,7 +211,9 @@ def pip_upgrade() -> tuple[bool, str]:
 def restart_process():
     """以相同參數重新啟動自己（載入新版 yt-dlp）。"""
     env = {**os.environ, "YTDL_JUST_UPDATED": "1"}
-    subprocess.Popen([sys.executable, *sys.argv], env=env, cwd=str(ROOT))
+    # 打包版 sys.argv[0] 就是 App 本身；原始碼版要再帶上 server.py / desktop.py
+    args = sys.argv[1:] if FROZEN else sys.argv
+    subprocess.Popen([sys.executable, *args], env=env, cwd=str(ROOT))
     os._exit(0)
 
 # 啟用 deno 與 node（YouTube 需要 JS runtime 解 challenge）
@@ -1110,7 +1139,7 @@ def api_zip(job_id):
 @app.get("/api/meta")
 def api_meta():
     return jsonify(version=yt_dlp.version.__version__, latest=latest_version(), channel=CHANNEL,
-                   frozen=FROZEN, releases_url=RELEASES_URL,
+                   frozen=FROZEN, update_ready=UPDATE_STATE["ready"],
                    ffmpeg=bool(shutil.which("ffmpeg")), cookies_file=COOKIES_FILE.is_file(),
                    disk=disk_info(get_download_dir()), min_free=MIN_FREE_BYTES,
                    just_updated=os.environ.get("YTDL_JUST_UPDATED") == "1",
@@ -1162,9 +1191,7 @@ def api_settings_save():
 
 @app.post("/api/update")
 def api_update():
-    """手動更新 yt-dlp；沒有進行中的工作時自動重啟套用。"""
-    if FROZEN:
-        return jsonify(error="打包版無法自行更新，請到 GitHub Releases 下載最新版", url=RELEASES_URL), 409
+    """手動更新 yt-dlp；沒有進行中的工作時自動重啟套用。打包版若已在背景下載好，直接重新啟動。"""
     if UPDATE_STATE["running"]:
         return jsonify(error="更新進行中"), 409
     if _busy():
@@ -1172,7 +1199,10 @@ def api_update():
 
     def work():
         UPDATE_STATE.update(running=True, message="更新中…")
-        ok, out = pip_upgrade()
+        ok, out = (True, "") if UPDATE_STATE["ready"] else upgrade()
+        if ok and FROZEN and not UPDATE_STATE["ready"]:  # PyPI 上沒有更新的版本
+            UPDATE_STATE.update(running=False, message=out)
+            return
         UPDATE_STATE.update(running=False, message="更新完成，重新啟動中" if ok else f"更新失敗：{out}")
         if ok:
             time.sleep(1.0)
@@ -1255,7 +1285,7 @@ def api_auth_test():
 
 
 def startup_update():
-    """啟動時檢查 PyPI，有新版就 pip 升級並重啟（只做一次，避免迴圈）。打包版沒有 pip，改由網頁提示下載新版。"""
+    """啟動時檢查 PyPI，有新版就 pip 升級並重啟（只做一次，避免迴圈）。打包版改用 auto_update_app。"""
     if FROZEN or os.environ.get("YTDL_AUTO_UPDATE", "1") == "0" or os.environ.get("YTDL_JUST_UPDATED") == "1":
         return
     current = yt_dlp.version.__version__
@@ -1282,6 +1312,23 @@ def periodic_update_check():
                 restart_process()
 
 
+def auto_update_app():
+    """打包版：啟動時與每 6 小時在背景下載新版 yt-dlp。
+    不自動重開視窗打斷使用者；下次開啟 App，或按介面上的「重新啟動以套用」時生效。"""
+    while True:
+        if os.environ.get("YTDL_AUTO_UPDATE", "1") != "0" and not UPDATE_STATE["running"]:
+            _, msg = app_upgrade()
+            print(f"yt-dlp 自動更新：{msg}", flush=True)
+        time.sleep(6 * 3600)
+
+
+def start_background_updates():
+    if FROZEN:
+        threading.Thread(target=auto_update_app, daemon=True).start()
+    else:
+        threading.Thread(target=periodic_update_check, daemon=True).start()
+
+
 @app.get("/")
 def index():
     return send_from_directory(BUNDLE, "index.html")
@@ -1301,8 +1348,9 @@ def main():
             stream.reconfigure(errors="replace")
     startup_update()
     load_jobs()
-    threading.Thread(target=periodic_update_check, daemon=True).start()
-    print(f"YT 下載器： {url}   （yt-dlp {yt_dlp.version.__version__}）", flush=True)
+    start_background_updates()
+    print(f"YT 下載器： {url}   （yt-dlp {yt_dlp.version.__version__}{'，自動更新版' if YTDLP_OVERLAY else ''}）",
+          flush=True)
     app.run(host=HOST, port=PORT, threaded=True, debug=False)
 
 

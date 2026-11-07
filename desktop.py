@@ -80,6 +80,9 @@ def wait_until_up(url: str, timeout: float) -> bool:
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--check-ytdlp":  # 自動更新：確認新版 yt-dlp 能載入
+        import ytdlp_update
+        os._exit(ytdlp_update.check(sys.argv[2]))
     _redirect_output(None)
     import server  # 匯入時會決定資料夾位置、把內建的 ffmpeg / deno 加進 PATH
     _redirect_output(server.ROOT)
@@ -90,13 +93,19 @@ def main():
 
     url = f"http://127.0.0.1:{server.PORT}"
     icon = _icon_data_uri(server.BUNDLE)
+    if os.environ.get("YTDL_JUST_UPDATED") == "1":  # 更新後重新啟動：等舊程序釋放連接埠
+        end = time.monotonic() + 15
+        while server._port_in_use(server.HOST, server.PORT) and time.monotonic() < end:
+            time.sleep(0.2)
     attached = server._port_in_use(server.HOST, server.PORT)  # 已有引擎在跑：只開視窗
     if not attached:
         server.load_jobs()
+        server.start_background_updates()
         threading.Thread(target=server.app.run, daemon=True, kwargs={
             "host": server.HOST, "port": server.PORT, "threaded": True, "debug": False, "use_reloader": False,
         }).start()
-        print(f"{TITLE} 引擎啟動於 {url}（yt-dlp {server.yt_dlp.version.__version__}）", flush=True)
+        print(f"{TITLE} 引擎啟動於 {url}（yt-dlp {server.yt_dlp.version.__version__}"
+              f"{'，自動更新版' if server.YTDLP_OVERLAY else ''}）", flush=True)
 
     window = webview.create_window(TITLE, html=page(icon, TITLE, "正在啟動下載引擎…"),
                                    width=1240, height=880, min_size=(420, 600), background_color=BG)

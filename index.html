@@ -1348,11 +1348,11 @@ async function loadMeta() {
     const m = await api("/api/meta");
     $("#setupCard").classList.add("hidden");
     $("#envPill").innerHTML = `<span class="dot ${m.ffmpeg ? "" : "bad"}"></span><span>${m.ffmpeg ? "引擎已連線" : "引擎已連線 · 缺少 FFmpeg"}</span>`;
-    const canUpdate = m.latest && newer(m.latest, m.version);
+    // App 版會在背景自動下載新版 yt-dlp（update_ready），按下按鈕只需重新啟動套用
+    const canUpdate = m.update_ready || (m.latest && newer(m.latest, m.version));
     $("#updateBtn").classList.toggle("hidden", !canUpdate && !m.update_running);
     $("#updateBtn").disabled = !!m.update_running;
-    $("#updateBtn").textContent = m.update_running ? "更新中…" : m.frozen ? `下載新版引擎（yt-dlp ${m.latest}）` : `更新至 ${m.latest}`;
-    $("#updateBtn").dataset.url = m.frozen ? (m.releases_url || "") : "";
+    $("#updateBtn").textContent = m.update_running ? "更新中…" : m.update_ready ? `重新啟動以套用 yt-dlp ${m.update_ready}` : `更新至 ${m.latest}`;
     if (m.update_message && !m.update_running && /失敗/.test(m.update_message)) toast(m.update_message, "err");
     if (m.just_updated && !sessionStorage.getItem("ytdl-updated-toast")) { toast(`yt-dlp 已自動更新至 ${m.version}`, "ok"); try { sessionStorage.setItem("ytdl-updated-toast", "1"); } catch {} }
     if (!m.cookies_file) renderCookieFile(false, 0);
@@ -1378,12 +1378,9 @@ $("#apiConnect").addEventListener("click", async () => {
   else toast("連線失敗，請確認引擎已啟動、位址正確", "err");
 });
 $("#updateBtn").addEventListener("click", async () => {
-  // 打包版（.exe / macOS）沒有 pip，改到 GitHub Releases 下載新版；Releases 每天會用最新 yt-dlp 重建
-  const rel = $("#updateBtn").dataset.url;
-  if (rel) { window.open(rel, "_blank", "noopener"); toast("下載新版後，關閉目前的引擎視窗再開啟新版", "ok"); return; }
   try {
     await api("/api/update", { method: "POST" });
-    toast("開始更新 yt-dlp，完成後引擎會自動重啟", "ok");
+    toast("開始更新 yt-dlp，完成後會自動重新啟動", "ok");
     $("#updateBtn").disabled = true; $("#updateBtn").textContent = "更新中…";
     metaTimer = setTimeout(loadMeta, 3000);
   } catch (err) { toast(err.message, "err"); }

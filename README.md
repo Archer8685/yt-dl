@@ -48,7 +48,13 @@ GitHub Pages 只能放靜態網頁，**無法執行 yt-dlp**，所以分成兩�
 - 每個下載完成的檔案都有「開啟資料夾」，會直接在檔案總管 / Finder 中顯示。
 - 用 `YT-Downloader --server` 啟動時只執行引擎、不開視窗，可以改用瀏覽器開 http://127.0.0.1:8765。
 
-App 無法自行更新 yt-dlp。GitHub Actions 每天會檢查 yt-dlp 新版並重新打包；App 裡出現「下載新版引擎」時，下載並安裝新版即可（設定與下載紀錄會保留）。
+**yt-dlp 自動更新**：YouTube 常改版，App 會在啟動時與每 6 小時檢查 PyPI，有新版就在背景下載，放在資料夾裡的 `ytdlp/`。下次開啟 App 就會使用新版；也可以按右上角「重新啟動以套用」立即套用。
+
+- 下載的 wheel 會用 PyPI 提供的 sha256 校驗，並先在另一個程序實際載入一次，確認能用才切換。
+- 新版載入失敗時，App 會自動退回內建版本，不會打不開。
+- 設定 `YTDL_AUTO_UPDATE=0` 可以關閉自動更新。
+
+App 本身（介面、FFmpeg、Deno）的更新，請到 Releases 下載新版安裝；設定與下載紀錄會保留。
 
 ### 用 Python 原始碼執行（Linux、Intel Mac、開發用）
 
@@ -73,7 +79,7 @@ python desktop.py        # 開發時直接開 App 視窗
 
 - `build_app.py` 會下載對應平台的 FFmpeg / ffprobe / Deno 一起打包。
 - App 圖示由 `assets/make_icon.py` 產生（需要 Pillow）。
-- push 到 `main` 或每天排程時，`.github/workflows/release.yml` 會在 Windows 與 macOS 上打包，實際安裝並做啟動測試後發布到 Releases。同一份程式碼加同一版 yt-dlp 只發布一次。
+- 發布新版：修改 `VERSION`（例如 `1.0.1`）並 push 到 `main`。`.github/workflows/release.yml` 會在 Windows 與 macOS 上打包，實際安裝並做啟動測試後，發布 `v<版本>` 到 Releases。也可以在 Actions 頁面手動執行；同一版只會發布一次。
 
 ## yt-dlp 自動更新
 

@@ -1,16 +1,12 @@
 name: Release app
 
 # 把下載器打包成桌面 App（Windows 安裝精靈、macOS .dmg），實際安裝後做啟動測試，再發布到 GitHub Releases。
-# - 程式有變更時重建
-# - 每天檢查一次 yt-dlp 新版（YouTube 常改版，打包版無法自行更新，靠重建跟上）
-# 同一份程式碼＋同一版 yt-dlp 只發布一次（tag：engine-<yt-dlp 版本>-<commit>）。
+# 版本號在 VERSION 檔：改了版本號並 push 才會發布 v<版本>；同一版只發布一次。
+# yt-dlp 由 App 自己從 PyPI 自動更新，不需要為了 yt-dlp 重新打包。
 on:
   push:
     branches: [main]
-    paths: [server.py, desktop.py, index.html, build_app.py, requirements.txt, requirements-app.txt, assets/**,
-            .github/workflows/release.yml]
-  schedule:
-    - cron: "17 3 * * *"
+    paths: [VERSION]
   workflow_dispatch:
 
 permissions:
@@ -25,16 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.v.outputs.tag }}
-      ytdlp: ${{ steps.v.outputs.ytdlp }}
       build: ${{ steps.v.outputs.build }}
     steps:
+      - uses: actions/checkout@v4
       - id: v
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ytdlp=$(curl -fsSL https://pypi.org/pypi/yt-dlp/json | jq -r .info.version)
-          tag="engine-${ytdlp}-${GITHUB_SHA::7}"
-          echo "ytdlp=$ytdlp" >> "$GITHUB_OUTPUT"
+          tag="v$(tr -d '[:space:]' < VERSION)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "$tag 已發布，略過"
@@ -61,8 +55,6 @@ jobs:
       - name: Test
         run: python -m pytest -q
       - name: Build
-        env:
-          YTDL_APP_VERSION: ${{ needs.plan.outputs.tag }}
         run: python build_app.py
       - name: Install the built app (Windows)
         if: runner.os == 'Windows'
@@ -91,6 +83,12 @@ jobs:
           page=$(curl -fsS http://127.0.0.1:8799/)
           grep -q "<html" <<< "$page"
           kill %1 || true
+          # yt-dlp 自動更新：App 要能載入使用者資料夾裡的新版（而不是內建版）
+          python -m pip download -q --no-deps --only-binary :all: -d "$RUNNER_TEMP/whl" yt-dlp
+          python -c "import sys, zipfile, glob; zipfile.ZipFile(glob.glob(sys.argv[1] + '/yt_dlp-*.whl')[0]).extractall(sys.argv[2])" \
+            "$RUNNER_TEMP/whl" "$RUNNER_TEMP/overlay"
+          "$exe" --check-ytdlp "$RUNNER_TEMP/overlay"
+          test -f "$RUNNER_TEMP/overlay/OK"
       - uses: actions/upload-artifact@v4
         with:
           name: app-${{ matrix.os }}
@@ -110,10 +108,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
-          YTDLP: ${{ needs.plan.outputs.ytdlp }}
         run: |
           cat > notes.md <<EOF
-          YT 下載器桌面 App，內含 yt-dlp ${YTDLP}、FFmpeg、Deno，不用另外安裝任何東西。
+          YT 下載器桌面 App，內含 yt-dlp、FFmpeg、Deno，不用另外安裝任何東西。
+          yt-dlp 會自動更新：App 在背景從 PyPI 下載新版，下次開啟（或按「重新啟動以套用」）就會使用。
 
           ## Windows 10 / 11
           下載 **YT-Downloader-Setup-Windows.exe**，執行安裝精靈；完成後從「開始」功能表或桌面開啟「YT 下載器」。
@@ -127,4 +125,4 @@ jobs:
           檔案預設存在「下載」資料夾裡的 YT-Downloads，可以在 App 裡的「儲存位置」更改。
           EOF
           gh release create "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "YT 下載器 ${TAG#engine-}" --notes-file notes.md --latest
+            --title "YT 下載器 ${TAG}" --notes-file notes.md --latest

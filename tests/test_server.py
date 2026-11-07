@@ -391,22 +391,125 @@ def test_postprocessor_hook_sets_expected_size(fake_ydl, monkeypatch, tmp_path):
     assert job.status == "done"
 
 
-def test_frozen_build_points_updates_to_releases(client, monkeypatch):
+def _wheel_bytes(files: dict) -> bytes:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, text in files.items():
+            z.writestr(name, text)
+    return buf.getvalue()
+
+
+@pytest.fixture
+def fake_pypi():
+    """假的 PyPI：yt-dlp 2099.1.1 需要 yt-dlp-ejs 9.9.9。"""
+    import hashlib
+    import json as _json
+    ytdlp = _wheel_bytes({"yt_dlp/__init__.py": "", "yt_dlp/version.py": "__version__ = '2099.1.1'\n",
+                          "yt_dlp-2099.1.1.dist-info/METADATA": "x"})
+    ejs = _wheel_bytes({"yt_dlp_ejs/__init__.py": "", "yt_dlp_ejs/yt/solver.js": "//"})
+
+    def entry(name, data):
+        return {"packagetype": "bdist_wheel", "filename": f"{name}-py3-none-any.whl", "url": f"https://f/{name}",
+                "digests": {"sha256": hashlib.sha256(data).hexdigest()}}
+    blobs = {"https://f/yt_dlp-2099.1.1": ytdlp, "https://f/yt_dlp_ejs-9.9.9": ejs}
+    meta = {"info": {"version": "2099.1.1", "requires_dist": ['yt-dlp-ejs==9.9.9; extra == "default"']},
+            "urls": [{"packagetype": "sdist", "filename": "yt_dlp-2099.1.1.tar.gz"}, entry("yt_dlp-2099.1.1", ytdlp)],
+            "releases": {"2099.1.1": [], "2099.2.1.dev0": []}}
+    pages = {"https://pypi.org/pypi/yt-dlp/json": _json.dumps(meta).encode(),
+             "https://pypi.org/pypi/yt-dlp-ejs/9.9.9/json":
+                 _json.dumps({"urls": [entry("yt_dlp_ejs-9.9.9", ejs)]}).encode()}
+
+    def get(url, timeout=60):
+        return pages.get(url) or blobs[url]
+    return get, meta, blobs
+
+
+def test_app_update_installs_verified_wheels(tmp_path, fake_pypi):
+    import ytdlp_update as u
+    get = fake_pypi[0]
+    version, data = u.latest("stable", get=get)
+    assert version == "2099.1.1"
+    checked = []
+    final = u.install(tmp_path, version, data, lambda p: checked.append(p) or True, get=get)
+    assert (final / "yt_dlp" / "version.py").is_file() and (final / "yt_dlp_ejs" / "yt" / "solver.js").is_file()
+    assert not (final / "yt_dlp-2099.1.1.dist-info").exists(), "只取套件本身"
+    assert checked == [tmp_path / "ytdlp" / "2099.1.1.staging"], "切換前要先驗證"
+    assert u.current(tmp_path) == ("2099.1.1", final)
+
+
+def test_app_update_rejects_bad_checksum_or_failed_verify(tmp_path, fake_pypi):
+    import ytdlp_update as u
+    get, meta, blobs = fake_pypi
+    with pytest.raises(RuntimeError, match="無法載入"):
+        u.install(tmp_path, "2099.1.1", meta, lambda p: False, get=get)
+    assert u.current(tmp_path) is None and not list((tmp_path / "ytdlp").iterdir()), "失敗不留下半套檔案"
+    blobs["https://f/yt_dlp-2099.1.1"] += b"tampered"
+    with pytest.raises(RuntimeError, match="校驗失敗"):
+        u.install(tmp_path, "2099.1.1", meta, lambda p: True, get=get)
+    assert u.current(tmp_path) is None
+
+
+def test_overlay_only_used_when_newer_than_bundled(tmp_path, monkeypatch):
+    import ytdlp_update as u
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "bundled-ytdlp.txt").write_text("2026.10.26")
+    pkg = tmp_path / "ytdlp" / "2026.11.1" / "yt_dlp"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (tmp_path / "ytdlp" / "current.json").write_text('{"version": "2026.11.1", "dir": "2026.11.1"}')
+    monkeypatch.setattr(u.sys, "path", list(u.sys.path))
+    assert u.activate(tmp_path, bundle) == "2026.11.1"
+    assert u.sys.path[0] == str(pkg.parent)
+    (bundle / "bundled-ytdlp.txt").write_text("2026.12.1")  # 安裝了更新的 App → 舊的更新失效
+    assert u.activate(tmp_path, bundle) is None
+    (bundle / "bundled-ytdlp.txt").write_text("2026.10.26")
+    u.fallback(tmp_path)  # 載入失敗 → 停用，之後不再嘗試
+    assert str(pkg.parent) not in u.sys.path
+    assert u.activate(tmp_path, bundle) is None and (tmp_path / "ytdlp" / "broken.json").exists()
+
+
+def test_background_and_manual_updates_do_not_overlap(monkeypatch):
     monkeypatch.setattr(server, "FROZEN", True)
+    monkeypatch.setitem(server.UPDATE_STATE, "ready", None)
+    monkeypatch.setitem(server._LATEST, "data", {"info": {}})
     monkeypatch.setattr(server, "latest_version", lambda force=False: "2099.1.1")
-    meta = client.get("/api/meta").get_json()
-    assert meta["frozen"] is True and meta["releases_url"].startswith("https://github.com/")
-    r = client.post("/api/update")
-    assert r.status_code == 409 and r.get_json()["url"] == server.RELEASES_URL
+    monkeypatch.setattr(server.ytdlp_update, "cleanup", lambda root, keep: None)
+    active, peak = [0], [0]
+
+    def slow_install(root, v, data, verify):
+        active[0] += 1
+        peak[0] = max(peak[0], active[0])
+        server.time.sleep(0.2)
+        active[0] -= 1
+    monkeypatch.setattr(server.ytdlp_update, "install", slow_install)
+    threads = [server.threading.Thread(target=server.app_upgrade) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert peak[0] == 1, "兩個更新不能同時寫入"
+
+
+def test_frozen_update_downloads_then_restart_applies(client, monkeypatch):
+    monkeypatch.setattr(server, "FROZEN", True)
     monkeypatch.setattr(server, "pip_upgrade", lambda: pytest.fail("打包版不能呼叫 pip"))
-    server.startup_update()
-
-
-def test_release_tag_gives_bundled_ytdlp_version():
-    assert server._release_ytdlp_version("engine-2026.10.26-a1b2c3d") == "2026.10.26"
-    assert server._release_ytdlp_version("v1.0") is None
-    assert server._release_ytdlp_version(None) is None
-
+    monkeypatch.setitem(server.UPDATE_STATE, "ready", None)
+    monkeypatch.setitem(server._LATEST, "data", {"info": {}})
+    monkeypatch.setattr(server, "latest_version", lambda force=False: "2099.1.1")
+    monkeypatch.setattr(server.ytdlp_update, "install", lambda root, v, data, verify: root / "ytdlp" / v)
+    monkeypatch.setattr(server.ytdlp_update, "cleanup", lambda root, keep: None)
+    ok, msg = server.app_upgrade()
+    assert ok and server.UPDATE_STATE["ready"] == "2099.1.1" and "重新啟動" in msg
+    assert client.get("/api/meta").get_json()["update_ready"] == "2099.1.1"
+    restarted = server.threading.Event()
+    monkeypatch.setattr(server, "restart_process", restarted.set)
+    monkeypatch.setattr(server.time, "sleep", lambda s: None)
+    assert client.post("/api/update").status_code == 200
+    assert restarted.wait(2), "已下載好時按更新要直接重新啟動"
+    server.startup_update()  # 打包版啟動時不走 pip 流程
 
 def test_thumbnail_written_before_a_failure_is_not_progress(fake_ydl, monkeypatch):
     def thumb_then_fail(self, urls):

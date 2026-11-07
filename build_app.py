@@ -7,7 +7,7 @@
   macOS    dist/YT-Downloader-macOS-<arch>.dmg     拖進「應用程式」即可
 
 GitHub Actions（.github/workflows/release.yml）會在 Windows 與 macOS 上執行這支腳本並發布到 Releases。
-環境變數 YTDL_APP_VERSION 會寫進安裝程式的版本欄位。
+App 版本號取自 VERSION 檔（可用環境變數 YTDL_APP_VERSION 覆寫），會寫進安裝程式的版本欄位。
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ BIN = VENDOR / "bin"
 NAME = "YT-Downloader"            # 執行檔 / 資料夾名稱（英數，避免各平台路徑編碼問題）
 DISPLAY = "YT 下載器"              # 使用者看到的名稱：開始功能表、桌面捷徑、macOS App
 BUNDLE_ID = "io.github.archer8685.ytdl"
-VERSION = os.environ.get("YTDL_APP_VERSION", "0.0.0-dev")
+VERSION = os.environ.get("YTDL_APP_VERSION") or (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 DENO = "https://github.com/denoland/deno/releases/latest/download/deno-{triple}.zip"
 FFMPEG_WIN = ("https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/"
@@ -101,6 +101,15 @@ def check_tools():
         print(f"  {tool}: {out.stdout.splitlines()[0]}")
 
 
+def bundled_version_file() -> Path:
+    """記下打包進去的 yt-dlp 版本：App 只在自動更新下載的版本比它新時才改用更新版。"""
+    import yt_dlp
+    out = BUILD / "bundled-ytdlp.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(yt_dlp.version.__version__, encoding="utf-8")
+    return out
+
+
 def pyinstaller():
     """onedir 視窗程式：啟動不用每次解壓，macOS 會產生 .app。"""
     sep = os.pathsep
@@ -110,6 +119,7 @@ def pyinstaller():
            "--distpath", str(DIST), "--workpath", str(BUILD / "pyinstaller"), "--specpath", str(BUILD),
            "--add-data", f"{ROOT / 'index.html'}{sep}.",
            "--add-data", f"{ROOT / 'assets' / 'icon-128.png'}{sep}assets",
+           "--add-data", f"{bundled_version_file()}{sep}.",
            "--add-binary", f"{BIN}{os.sep}*{sep}bin",
            str(ROOT / "desktop.py")]
     shutil.rmtree(DIST / NAME, ignore_errors=True)
