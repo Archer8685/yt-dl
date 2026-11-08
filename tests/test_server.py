@@ -556,3 +556,21 @@ def test_user_data_dir_is_outside_the_bundle():
 
 def test_cookies_upload_rejects_non_netscape(client):
     assert client.post("/api/cookies", json={"text": "hello"}).status_code == 400
+
+
+def test_engine_starts_without_reverse_hostname_lookup(monkeypatch):
+    """macOS: socket.getfqdn() triggers the local-network prompt and blocks until answered,
+    so the engine must start listening without it."""
+    import socket
+
+    from werkzeug.serving import make_server
+
+    def no_lookup(*a, **k):
+        raise AssertionError("getfqdn must not be called")
+
+    monkeypatch.setattr(socket, "getfqdn", no_lookup)
+    srv = make_server("127.0.0.1", 0, server.app, threaded=True)
+    try:
+        assert srv.server_name == "127.0.0.1" and srv.server_port > 0
+    finally:
+        srv.server_close()

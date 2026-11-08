@@ -104,6 +104,21 @@ app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024  # cookies.txt 上傳上限
 
 
+def _server_bind_without_fqdn(self):
+    """http.server 的 server_bind 會用 socket.getfqdn() 反查本機的完整主機名稱，只為了填 server_name。
+    macOS 上這個查詢會跳出「允許尋找區域網路上的裝置」的詢問，並一直卡到使用者回答為止，
+    引擎就沒辦法開始服務（App 有視窗時才會發生）；公司網路的 DNS 慢時 Windows 也會白等。
+    本機引擎用不到主機名稱，直接用綁定的位址。"""
+    import socketserver
+    socketserver.TCPServer.server_bind(self)
+    self.server_name, self.server_port = self.server_address[:2]
+
+
+import http.server
+
+http.server.HTTPServer.server_bind = _server_bind_without_fqdn
+
+
 def _origin_allowed(origin: str) -> bool:
     if not origin:
         return False
