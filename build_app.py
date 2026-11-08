@@ -17,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -45,13 +46,24 @@ def download(url: str, dest: Path) -> Path:
     print(f"下載 {url}", flush=True)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".tmp")
-    # 優先用系統 curl：Windows / macOS 內建，且使用系統憑證（公司網路的 SSL 檢查也能通過）
-    if shutil.which("curl"):
-        subprocess.run(["curl", "-fL", "--retry", "3", "-o", str(tmp), url], check=True)
-    else:
-        req = urllib.request.Request(url, headers={"User-Agent": "yt-dl-build"})
-        with urllib.request.urlopen(req, timeout=300) as r, tmp.open("wb") as f:
-            shutil.copyfileobj(r, f)
+    # GitHub 的下載偶爾會暫時回 504 或連線中斷：多試幾次、每次等久一點
+    attempts = 5
+    for i in range(1, attempts + 1):
+        try:
+            # 優先用系統 curl：Windows / macOS 內建，且使用系統憑證（公司網路的 SSL 檢查也能通過）
+            if shutil.which("curl"):
+                subprocess.run(["curl", "-fL", "--retry", "3", "-o", str(tmp), url], check=True)
+            else:
+                req = urllib.request.Request(url, headers={"User-Agent": "yt-dl-build"})
+                with urllib.request.urlopen(req, timeout=300) as r, tmp.open("wb") as f:
+                    shutil.copyfileobj(r, f)
+            break
+        except (subprocess.CalledProcessError, OSError) as e:
+            if i == attempts:
+                raise
+            wait = 15 * i
+            print(f"download failed ({e}); retry {i}/{attempts - 1} in {wait}s", flush=True)
+            time.sleep(wait)
     tmp.replace(dest)
     return dest
 
