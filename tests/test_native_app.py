@@ -529,3 +529,92 @@ def test_update_cookies_uploads_then_rechecks(premium_page, tmp_path, monkeypatc
     up[3]({"exists": True})
     assert adv.network()["cookies_file"] is True
     assert api.last("/api/auth/test")  # 上傳成功後自動重新檢查
+
+
+# --------------------------------------------------------------------------- #
+#  自動貼上剪貼簿裡的影片連結
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("text,ok", [
+    ("https://www.youtube.com/watch?v=jNQXAC9IVRw", True),
+    ("  https://youtu.be/jNQXAC9IVRw  ", True),
+    ("https://www.bilibili.com/video/BV1xx411c7mD", True),
+    ("https://vimeo.com/76979871", True),
+    ("https://example.com/files/clip.mp4", True),       # 直接指向影音檔
+    ("https://www.google.com/search?q=youtube", False),  # 一般網頁
+    ("https://github.com/yt-dlp/yt-dlp", False),
+    ("看這個 https://youtu.be/jNQXAC9IVRw", False),      # 不是單純的網址
+    ("https://youtu.be/a\nhttps://youtu.be/b", False),
+    ("ftp://example.com/a.mp4", False),
+    ("", False),
+])
+def test_is_supported_url(text, ok):
+    assert na.is_supported_url(text) is ok
+
+
+@pytest.fixture
+def clip_win(app):
+    api = FakeApi()
+    win = na.MainWindow(api, lambda: False)
+    checked = []
+    win.clipboard.check = checked.append  # 不開背景執行緒：直接記下要判斷的文字
+    na.set_auto_paste(True)
+    yield win, api, checked
+    na.set_auto_paste(True)
+    win.close()
+
+
+def test_clipboard_checked_once_per_content(clip_win):
+    from PySide6.QtGui import QGuiApplication
+    win, _api, checked = clip_win
+    QGuiApplication.clipboard().setText("https://youtu.be/jNQXAC9IVRw")
+    win.check_clipboard()
+    win.check_clipboard()  # 同一段內容（例如切回視窗兩次）只處理一次
+    assert checked == ["https://youtu.be/jNQXAC9IVRw"]
+    QGuiApplication.clipboard().setText("第一行\n第二行")
+    win.check_clipboard()
+    assert len(checked) == 1
+
+
+def test_clipboard_disabled_in_settings(clip_win):
+    from PySide6.QtGui import QGuiApplication
+    win, _api, checked = clip_win
+    win.settings.auto_paste.setChecked(False)  # 設定頁關掉
+    assert na.auto_paste_enabled() is False
+    QGuiApplication.clipboard().setText("https://youtu.be/disabled0001")
+    win.check_clipboard()
+    assert checked == []
+
+
+def test_paste_link_fills_and_analyzes(clip_win):
+    win, api, _ = clip_win
+    win.go(2)
+    win.paste_link("https://youtu.be/jNQXAC9IVRw")
+    assert win.stack.currentIndex() == 0  # 切到新增下載
+    assert win.download.url.text() == "https://youtu.be/jNQXAC9IVRw"
+    assert api.last("/api/info")[2]["url"] == "https://youtu.be/jNQXAC9IVRw"
+
+
+def test_paste_link_does_not_clobber_typing_or_running_analysis(clip_win):
+    win, api, _ = clip_win
+    page = win.download
+    page.url.setText("https://www.youtube.com/watch?v=typing")  # 使用者打到一半、還沒解析
+    win.paste_link("https://youtu.be/jNQXAC9IVRw")
+    assert page.url.text() == "https://www.youtube.com/watch?v=typing"
+    assert not [c for c in api.calls if c[1] == "/api/info"]
+    page.analyze()  # 正在解析中
+    n = len([c for c in api.calls if c[1] == "/api/info"])
+    win.paste_link("https://youtu.be/jNQXAC9IVRw")
+    assert len([c for c in api.calls if c[1] == "/api/info"]) == n
+    api.last("/api/info")[3](video_info("T", "typing"))  # 解析完成後，已解析的網址可以被新的連結取代
+    win.paste_link("https://youtu.be/jNQXAC9IVRw")
+    assert page.url.text() == "https://youtu.be/jNQXAC9IVRw"
+
+
+def test_clipboard_watcher_finds_supported_link_in_background(app):
+    w = na.ClipboardWatcher()
+    found = []
+    w.found.connect(found.append)
+    w.check("https://youtu.be/jNQXAC9IVRw")
+    w.check("https://www.google.com/")
+    assert wait_until(lambda: found, 10_000)
+    assert found == ["https://youtu.be/jNQXAC9IVRw"]

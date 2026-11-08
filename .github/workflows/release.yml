@@ -34,6 +34,8 @@ jobs:
             echo "$tag 已發布，略過"
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
+            # 每一版都要有更新說明：CHANGELOG.md 沒寫就在打包前停下來，不浪費時間
+            python3 tools/release_notes.py "${tag#v}" > /dev/null
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -145,6 +147,7 @@ jobs:
     needs: [plan, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: assets
@@ -154,20 +157,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          cat > notes.md <<EOF
-          YT 下載器桌面 App，內含 yt-dlp、FFmpeg、Deno，不用另外安裝任何東西。
-          yt-dlp 會自動更新：App 在背景從 PyPI 下載新版，下次開啟（或按「重新啟動以套用」）就會使用。
-
-          ## Windows 10 / 11
-          下載 **YT-Downloader-Setup-Windows.exe**，執行安裝精靈；完成後從「開始」功能表或桌面開啟「YT 下載器」。
-          若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。解除安裝：設定 → 應用程式。
-
-          ## macOS（Apple 晶片）
-          下載 **YT-Downloader-macOS-AppleSilicon.dmg**，打開後把「YT 下載器」拖進「應用程式」。
-          第一次開啟若被擋下：到「系統設定 → 隱私權與安全性」按「仍要打開」，
-          或在「終端機」執行一次 \`xattr -dr com.apple.quarantine "/Applications/YT 下載器.app"\`。
-
-          檔案預設存在「下載」資料夾裡的 YT-Downloads，可以在 App 裡的「儲存位置」更改。
-          EOF
+          # Release 說明 = CHANGELOG.md 裡這一版的更新內容 + 下載安裝說明
+          python3 tools/release_notes.py "${TAG#v}" > notes.md
           gh release create "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "YT 下載器 ${TAG}" --notes-file notes.md --latest

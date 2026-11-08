@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from PySide6.QtCore import QByteArray, QObject, QPointF, QRectF, QSettings, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QByteArray, QEvent, QObject, QPointF, QRectF, QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -273,6 +276,61 @@ def fmt_eta(sec) -> str:
     if sec >= 60:
         return f"剩 {sec // 60} 分 {sec % 60} 秒"
     return f"剩 {sec} 秒"
+
+
+MEDIA_EXT = (".mp4", ".m4v", ".webm", ".mkv", ".mov", ".mp3", ".m4a", ".aac", ".flac", ".m3u8", ".mpd")
+_EXTRACTORS: list | None = None
+_EXTRACTORS_LOCK = threading.Lock()
+
+
+def is_supported_url(text: str) -> bool:
+    """剪貼簿裡的文字是不是「適合下載」的連結：yt-dlp 認得的網站（YouTube、Bilibili、X…），
+    或直接指向影音檔的網址。一般網頁（搜尋結果、GitHub…）不算，免得每次複製網址都被拿去解析。
+
+    第一次呼叫要載入 yt-dlp 的網站清單（約半秒），請在背景執行緒呼叫。
+    """
+    global _EXTRACTORS
+    text = (text or "").strip()
+    if not re.fullmatch(r"https?://\S{4,2000}", text):
+        return False
+    try:
+        if urlsplit(text).path.lower().endswith(MEDIA_EXT):
+            return True
+    except ValueError:
+        return False
+    with _EXTRACTORS_LOCK:
+        if _EXTRACTORS is None:
+            try:
+                from yt_dlp.extractor import gen_extractor_classes
+                _EXTRACTORS = [ie for ie in gen_extractor_classes() if ie.ie_key() != "Generic"]
+            except Exception:  # noqa: BLE001 — 判斷不了就當作不是，不影響 App
+                _EXTRACTORS = []
+    return any(ie.suitable(text) for ie in _EXTRACTORS)
+
+
+def auto_paste_enabled() -> bool:
+    v = settings_store().value("ui/auto_paste", True)
+    return v.lower() == "true" if isinstance(v, str) else bool(v)
+
+
+def set_auto_paste(on: bool):
+    settings_store().setValue("ui/auto_paste", on)
+
+
+class ClipboardWatcher(QObject):
+    """在背景判斷剪貼簿的連結能不能下載（不卡住介面），可以的話發出 found(網址)。"""
+    found = Signal(str)
+
+    def check(self, text: str):
+        def work():
+            if is_supported_url(text):
+                self.found.emit(text.strip())
+        threading.Thread(target=work, daemon=True).start()
+
+    @staticmethod
+    def warm_up():
+        """App 開啟後先在背景載入網站清單，第一次判斷時就不用等。"""
+        threading.Thread(target=lambda: is_supported_url("https://www.youtube.com/watch?v=x"), daemon=True).start()
 
 
 def newer(latest: str | None, current: str | None) -> bool:
@@ -1142,8 +1200,20 @@ class SettingsPage(QWidget):
         self.api, self.toast = api, toast
         self.advanced = advanced  # 進階選項面板：Cookie 來源與「Premium 高位元率」開關在那裡
         lay = page_layout(self)
+        from native_options import Switch
+
+        # 一般
+        lay.addWidget(label("一般", "sectionHeader"))
+        general = Card()
+        self.auto_paste = Switch(auto_paste_enabled())
+        self.auto_paste.toggled.connect(set_auto_paste)
+        general.add(form_row("自動貼上剪貼簿裡的影片連結", self.auto_paste))
+        lay.addWidget(general)
+        lay.addWidget(label("開啟 App 或切回視窗時，剪貼簿裡如果是 YouTube 等支援網站的影片連結，"
+                            "會自動貼到「新增下載」並開始解析；一般網頁連結不會。", "hint", wrap=True))
 
         # 外觀
+        lay.addSpacing(8)
         lay.addWidget(label("外觀", "sectionHeader"))
         look = Card()
         theme, size = ui_prefs()
@@ -1167,7 +1237,6 @@ class SettingsPage(QWidget):
         reset_all.clicked.connect(self.reset_all)
         head.addWidget(reset_all)
         lay.addLayout(head)
-        from native_options import Switch
         defaults = Card()
         self.def_mode = PopUp(MODES)
         self.def_quality = PopUp([(None, "最佳畫質")] + QUALITIES)
@@ -1313,13 +1382,15 @@ class SettingsPage(QWidget):
         box.setIcon(QMessageBox.Question)
         box.setWindowTitle(TITLE)
         box.setText("要恢復所有預設值嗎？")
-        box.setInformativeText("外觀、文字大小、下載預設值和進階選項會恢復成剛安裝時的設定。"
+        box.setInformativeText("自動貼上、外觀、文字大小、下載預設值和進階選項會恢復成剛安裝時的設定。"
                                "儲存位置、cookies.txt 和已下載的檔案不受影響。")
         ok = box.addButton("恢復預設值", QMessageBox.AcceptRole)
         box.setDefaultButton(box.addButton("取消", QMessageBox.RejectRole))
         box.exec()
         if box.clickedButton() is not ok:
             return
+        self.auto_paste.setChecked(True)  # toggled 會存進設定
+        set_auto_paste(True)
         self.theme.set_value("system")
         self.font_size.set_value("medium")
         self._appearance_changed()
@@ -1614,6 +1685,9 @@ class MainWindow(QMainWindow):
         self.queue.online.connect(self.on_online)
         self.settings.meta_changed.connect(self.on_meta)
         self.settings.defaults_changed.connect(self.download.apply_defaults)
+        self.clipboard = ClipboardWatcher(self)
+        self.clipboard.found.connect(self.paste_link, Qt.QueuedConnection)
+        self._last_clip = None  # 處理過的剪貼簿內容：同一段只處理一次
         self._toast_timer = QTimer(self)
         self._toast_timer.setSingleShot(True)
         self._toast_timer.timeout.connect(self.banner.hide)
@@ -1633,6 +1707,38 @@ class MainWindow(QMainWindow):
         self.queue.start()
         self.check_engine()
         self._meta_timer.start(30 * 60 * 1000)
+        if auto_paste_enabled():
+            ClipboardWatcher.warm_up()
+        QTimer.singleShot(300, self.check_clipboard)  # 開啟時剪貼簿裡已經有影片連結：直接貼上
+
+    # ---------- 自動貼上剪貼簿裡的影片連結 ----------
+    def changeEvent(self, e):
+        super().changeEvent(e)
+        # 在瀏覽器複製網址後切回 App：再看一次剪貼簿
+        if e.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self.check_clipboard()
+
+    def check_clipboard(self):
+        if not auto_paste_enabled():
+            return
+        text = (QGuiApplication.clipboard().text() or "").strip()
+        if not text or text == self._last_clip or "\n" in text or len(text) > 2000:
+            return
+        self._last_clip = text
+        self.clipboard.check(text)
+
+    def paste_link(self, url: str):
+        """貼上並解析。正在解析、已經是這個網址、或使用者正在輸入別的網址時不動作。"""
+        page = self.download
+        current = page.url.text().strip()
+        if url == current or not page.analyze_btn.isEnabled():
+            return
+        if current and current != page._analyzed_url:  # 欄位裡是使用者打到一半、還沒解析的網址：不要蓋掉
+            return
+        self.go(0)
+        page.url.setText(url)
+        page.analyze()
+        self.toast("已自動貼上剪貼簿裡的影片連結（可在「設定」關閉）")
 
     def check_engine(self, attempt: int = 0):
         """引擎剛啟動可能還沒開始聽連接埠：最多等 15 秒；連不上或對方不是引擎就顯示原因。"""
