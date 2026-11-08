@@ -60,6 +60,15 @@ def _fetch(url: str, out: Path, headers: dict[str, str] | None = None):
             shutil.copyfileobj(r, f)
 
 
+def _api_headers(accept: str) -> dict[str, str]:
+    """GitHub API 的請求標頭。CI 有 GITHUB_TOKEN 就帶上：共用的 CI 機器匿名請求很快就會被限制（403）。
+    curl 跟著轉址到下載主機時不會把 Authorization 一起送過去。"""
+    h = {"Accept": accept}
+    if os.environ.get("GITHUB_TOKEN"):
+        h["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+    return h
+
+
 def _github_api_asset(url: str, tmp_json: Path) -> str | None:
     """GitHub Releases 的下載網址 → 同一個檔案的 API 下載網址。
 
@@ -70,7 +79,7 @@ def _github_api_asset(url: str, tmp_json: Path) -> str | None:
         return None
     owner, repo, tag, name = m.groups()
     api = f"https://api.github.com/repos/{owner}/{repo}/releases/" + (f"tags/{tag}" if tag else "latest")
-    _fetch(api, tmp_json, {"Accept": "application/vnd.github+json"})
+    _fetch(api, tmp_json, _api_headers("application/vnd.github+json"))
     assets = json.loads(tmp_json.read_text(encoding="utf-8")).get("assets") or []
     tmp_json.unlink()
     asset = next((a for a in assets if a.get("name") == name), None)
@@ -84,14 +93,14 @@ def download(url: str, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".tmp")
     # GitHub 的下載偶爾會暫時回 504 或連線中斷：多試幾次、每次等久一點；
-    # 從第二次起改走 GitHub API 下載同一個檔案
-    attempts = 5
+    # 直接下載和 GitHub API 下載輪流試（兩邊不一定同時出問題）
+    attempts = 6
     for i in range(1, attempts + 1):
         try:
-            api_url = _github_api_asset(url, dest.with_suffix(".json")) if i > 1 else None
+            api_url = _github_api_asset(url, dest.with_suffix(".json")) if i % 2 == 0 else None
             if api_url:
                 print(f"download via GitHub API: {api_url}", flush=True)
-                _fetch(api_url, tmp, {"Accept": "application/octet-stream"})
+                _fetch(api_url, tmp, _api_headers("application/octet-stream"))
             else:
                 _fetch(url, tmp)
             break

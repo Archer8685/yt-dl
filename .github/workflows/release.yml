@@ -55,6 +55,9 @@ jobs:
       - name: Test
         run: python -m pytest -q
       - name: Build
+        env:
+          # 下載 FFmpeg / Deno 失敗時改走 GitHub API；帶 token 才不會碰到匿名請求的次數限制（403）
+          GITHUB_TOKEN: ${{ github.token }}
         run: python build_app.py
       - name: Install the built app (Windows)
         if: runner.os == 'Windows'
