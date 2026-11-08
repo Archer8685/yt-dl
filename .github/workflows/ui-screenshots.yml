@@ -1,0 +1,54 @@
+name: UI screenshots
+
+# 原生介面改動時，在 macOS 與 Windows 上實際開啟 App 並截圖，方便檢查外觀（截圖在這次執行的 Artifacts）。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "native_*.py"
+      - "app_boot.py"
+      - "assets/**"
+      - "tools/ui_screenshot.py"
+      - ".github/workflows/ui-screenshots.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  screenshots:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      YTDL_PORT: "8797"
+      YTDL_AUTO_UPDATE: "0"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        shell: bash
+        # 和打包版同一組套件（PySide6-Essentials、macOS 的 PyObjC），截圖才會和實際 App 一樣
+        run: python -m pip install -r requirements-app.txt
+      - name: Screenshots
+        shell: bash
+        run: |
+          export YTDL_DOWNLOAD_DIR="$RUNNER_TEMP/dl"
+          for theme in light dark; do
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              # 切換系統外觀，原生元件才會畫成對應的深淺色
+              if [ "$theme" = dark ]; then v=true; else v=false; fi
+              osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $v" || true
+            fi
+            python tools/ui_screenshot.py "$RUNNER_TEMP/shots" "$theme"
+          done
+          ls -l "$RUNNER_TEMP/shots"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-${{ runner.os }}
+          path: ${{ runner.temp }}/shots

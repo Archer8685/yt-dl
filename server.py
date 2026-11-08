@@ -160,7 +160,7 @@ def latest_version(force=False) -> str | None:
 
 def _verify_ytdlp(path: Path) -> bool:
     """在另一個程序實際載入新版 yt-dlp，確認能用才切換（打包版用 App 本身的 --check-ytdlp）。"""
-    cmd = [sys.executable] if FROZEN else [sys.executable, str(BUNDLE / "desktop.py")]
+    cmd = [sys.executable] if FROZEN else [sys.executable, str(BUNDLE / "native_app.py")]
     try:
         p = subprocess.run([*cmd, "--check-ytdlp", str(path)], capture_output=True, timeout=120, check=False)
     except (OSError, subprocess.SubprocessError):
@@ -208,12 +208,21 @@ def pip_upgrade() -> tuple[bool, str]:
         return False, str(e)
 
 
+# 桌面 App 設定的重新啟動方式：handler(cmd, env) 要讓介面先正常關閉，再啟動 cmd。
+# 沒設定（純引擎）時直接啟動新程序並結束。
+RESTART_HANDLER = None
+
+
 def restart_process():
     """以相同參數重新啟動自己（載入新版 yt-dlp）。"""
     env = {**os.environ, "YTDL_JUST_UPDATED": "1"}
-    # 打包版 sys.argv[0] 就是 App 本身；原始碼版要再帶上 server.py / desktop.py
+    # 打包版 sys.argv[0] 就是 App 本身；原始碼版要再帶上 server.py / native_app.py
     args = sys.argv[1:] if FROZEN else sys.argv
-    subprocess.Popen([sys.executable, *args], env=env, cwd=str(ROOT))
+    cmd = [sys.executable, *args]
+    if RESTART_HANDLER is not None:
+        RESTART_HANDLER(cmd, env)
+        return
+    subprocess.Popen(cmd, env=env, cwd=str(ROOT))
     os._exit(0)
 
 # 啟用 deno 與 node（YouTube 需要 JS runtime 解 challenge）
@@ -1337,7 +1346,9 @@ def index():
 def _port_in_use(host: str, port: int) -> bool:
     import socket
     with socket.socket() as s:
-        s.settimeout(0.5)
+        # 本機上有程式在聽時 1 ms 內就會連上；沒有時 Windows 不會立刻拒絕而是重試到逾時，
+        # 所以逾時設短一點，不要讓每次啟動 App 都白等半秒
+        s.settimeout(0.2)
         return s.connect_ex(("127.0.0.1" if host in ("0.0.0.0", "") else host, port)) == 0
 
 

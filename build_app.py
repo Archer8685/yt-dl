@@ -110,21 +110,95 @@ def bundled_version_file() -> Path:
     return out
 
 
+# 介面只用到 QtCore / QtGui / QtWidgets / QtNetwork（QtSvg 保留給圖示用）；其他 Qt 模組一律不打包
+QT_EXCLUDES = [f"PySide6.{m}" for m in (
+    "QtWebEngineCore", "QtWebEngineWidgets", "QtWebEngineQuick", "QtWebChannel", "QtWebSockets", "QtWebView",
+    "Qt3DCore", "Qt3DRender", "Qt3DInput", "Qt3DLogic", "Qt3DAnimation", "Qt3DExtras",
+    "QtQml", "QtQuick", "QtQuickWidgets", "QtQuickControls2", "QtQuick3D", "QtQuickTest",
+    "QtMultimedia", "QtMultimediaWidgets", "QtSpatialAudio", "QtTextToSpeech",
+    "QtCharts", "QtDataVisualization", "QtGraphs", "QtGraphsWidgets", "QtPdf", "QtPdfWidgets",
+    "QtSql", "QtTest", "QtDesigner", "QtUiTools", "QtHelp", "QtOpenGL", "QtOpenGLWidgets",
+    "QtBluetooth", "QtNfc", "QtPositioning", "QtLocation", "QtSensors", "QtSerialPort", "QtSerialBus",
+    "QtRemoteObjects", "QtScxml", "QtStateMachine", "QtHttpServer", "QtXml", "QtConcurrent", "QtDBus",
+    "QtAxContainer", "QtCanvasPainter",
+)] + ["tkinter", "PyQt5", "PyQt6"]
+
+SPEC = """# 由 build_app.py 產生，請勿手動修改
+import fnmatch, re, sys
+
+DROP = {drop!r}
+KEEP_IMAGEFORMATS = {keep_imageformats!r}
+KEEP_PLATFORMS = {keep_platforms!r}
+TOOLS_DIR = {tools_dir!r}
+
+
+def keep(dest, src=""):
+    p = dest.replace("\\\\", "/").lower()
+    if any(fnmatch.fnmatch(p, pat) for pat in DROP):
+        return False
+    # PyInstaller 會分析 bin/ 裡 ffmpeg.exe 的相依 DLL，在最上層再放一份（約 180 MB）。
+    # 工具只用 bin/ 裡的那份，所以來源在工具資料夾、卻放在最上層的檔案一律不要
+    if "/" not in p and src.replace("\\\\", "/").lower().startswith(TOOLS_DIR):
+        return False
+    stem = re.sub(r"^lib", "", p.rsplit("/", 1)[-1].split(".")[0])
+    if "/plugins/imageformats/" in p:
+        return stem in KEEP_IMAGEFORMATS
+    if "/plugins/platforms/" in p:
+        return stem in KEEP_PLATFORMS
+    if "/translations/" in p and p.endswith(".qm"):
+        return p.endswith("_zh_tw.qm")  # Qt 內建對話框的繁體中文
+    return True
+
+
+# macOS 的毛玻璃側邊欄用 PyObjC（在函式裡才 import，明確列出確保打包進去）
+MAC_IMPORTS = ["objc", "AppKit", "Foundation"] if sys.platform == "darwin" else []
+a = Analysis([{entry!r}], pathex=[{root!r}], datas={datas!r}, binaries={binaries!r},
+             hiddenimports=MAC_IMPORTS, excludes={excludes!r})
+before = len(a.binaries) + len(a.datas)
+a.binaries = [x for x in a.binaries if keep(x[0], x[1])]
+a.datas = [x for x in a.datas if keep(x[0], x[1])]
+# 只印 ASCII：這段在 PyInstaller 子程序裡執行，CI 的 Windows 主控台是 cp1252，印中文會讓打包失敗
+print(f"build_app: removed {{before - len(a.binaries) - len(a.datas)}} unused Qt files")
+pyz = PYZ(a.pure)
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name={name!r}, console=False, icon={icon!r},
+          upx=False, codesign_identity=None, entitlements_file=None)
+coll = COLLECT(exe, a.binaries, a.datas, name={name!r}, upx=False)
+if sys.platform == "darwin":
+    app = BUNDLE(coll, name={name!r} + ".app", icon={icon!r}, bundle_identifier={bundle_id!r},
+                 info_plist={{"CFBundleDisplayName": {display!r}, "CFBundleShortVersionString": {version!r},
+                              "CFBundleVersion": {version!r}, "NSHighResolutionCapable": True,
+                              "NSRequiresAquaSystemAppearance": False}})
+"""
+
+
 def pyinstaller():
-    """onedir 視窗程式：啟動不用每次解壓，macOS 會產生 .app。"""
-    sep = os.pathsep
+    """onedir 視窗程式（原生 Qt 介面 native_app.py）：啟動不用每次解壓，macOS 會產生 .app。"""
     icon = ROOT / "assets" / ("icon.ico" if sys.platform == "win32" else "icon.icns")
-    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed",
-           "--name", NAME, "--icon", str(icon), "--osx-bundle-identifier", BUNDLE_ID,
-           "--distpath", str(DIST), "--workpath", str(BUILD / "pyinstaller"), "--specpath", str(BUILD),
-           "--add-data", f"{ROOT / 'index.html'}{sep}.",
-           "--add-data", f"{ROOT / 'assets' / 'icon-128.png'}{sep}assets",
-           "--add-data", f"{bundled_version_file()}{sep}.",
-           "--add-binary", f"{BIN}{os.sep}*{sep}bin",
-           str(ROOT / "desktop.py")]
+    spec = BUILD / f"{NAME}.spec"
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text(SPEC.format(
+        entry=str(ROOT / "native_app.py"), root=str(ROOT), name=NAME, icon=str(icon), bundle_id=BUNDLE_ID,
+        display=DISPLAY, version=VERSION, excludes=QT_EXCLUDES,
+        datas=[(str(ROOT / "index.html"), "."),  # 引擎的網頁版介面（瀏覽器開 http://127.0.0.1:8765）
+               (str(ROOT / "assets" / "icon-128.png"), "assets"),
+               (str(ROOT / "assets" / "chevron.png"), "assets"),  # Windows 彈出選單的箭頭
+               (str(bundled_version_file()), ".")],
+        binaries=[(str(BIN / "*"), "bin")],  # FFmpeg / ffprobe / Deno
+        tools_dir=str(BIN.resolve()).replace("\\", "/").lower() + "/",
+        # 用不到卻很大的檔案：軟體 OpenGL（約 20 MB）、PDF 引擎（只有 qpdf 圖片外掛會用到）、
+        # 虛擬鍵盤輸入法外掛與它拖進來的 QML / Quick（約 15 MB）
+        drop=["*/opengl32sw.dll", "*/qt6pdf.*", "*/qtpdf.framework/*",
+              "*/platforminputcontexts/*virtualkeyboard*", "*/qt6virtualkeyboard*", "*/qtvirtualkeyboard*.framework/*",
+              "*/qt6qml*", "*/qtqml*.framework/*", "*/qt6quick*", "*/qtquick*.framework/*",
+              "pyside6/qt6opengl.dll"],
+        keep_imageformats=["qjpeg", "qwebp", "qgif", "qico", "qsvg"],  # 縮圖是 JPEG / WebP；PNG 內建
+        keep_platforms=["qwindows", "qcocoa", "qoffscreen"],  # qoffscreen：CI 沒有螢幕時的煙霧測試
+    ), encoding="utf-8")
     shutil.rmtree(DIST / NAME, ignore_errors=True)
     shutil.rmtree(DIST / f"{NAME}.app", ignore_errors=True)
-    subprocess.run(cmd, check=True)
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
+                    "--distpath", str(DIST), "--workpath", str(BUILD / "pyinstaller"), str(spec)], check=True,
+                   env={**os.environ, "PYTHONIOENCODING": "utf-8"})  # 子程序的輸出（含中文路徑）也用 UTF-8
 
 
 INNO_SCRIPT = r"""

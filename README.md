@@ -35,7 +35,7 @@ GitHub Pages 只能放靜態網頁，**無法執行 yt-dlp**，所以分成兩�
 
 ### 桌面 App（建議）
 
-到 [Releases](https://github.com/Archer8685/yt-dl/releases/latest) 下載。App 已內建 yt-dlp、FFmpeg、Deno，不用裝 Python；介面在自己的視窗裡，不需要另開瀏覽器。
+到 [Releases](https://github.com/Archer8685/yt-dl/releases/latest) 下載。App 已內建 yt-dlp、FFmpeg、Deno，不用裝 Python。介面是原生視窗（Qt），外觀參照 macOS：macOS 上使用系統原生元件與毛玻璃側邊欄，並跟著系統切換淺色／深色。
 
 | 系統 | 檔案 | 安裝方式 |
 | --- | --- | --- |
@@ -45,7 +45,9 @@ GitHub Pages 只能放靜態網頁，**無法執行 yt-dlp**，所以分成兩�
 - 檔案預設存在「下載」資料夾裡的 `YT-Downloads`。
 - 設定、cookies、執行紀錄 `engine.log` 存在 `%LOCALAPPDATA%\YT-Downloader`（macOS：`~/Library/Application Support/YT-Downloader`）。
 - 下載進行中關閉視窗時會先詢問；關掉後，下次開啟按「繼續下載」即可接著下載。
-- 每個下載完成的檔案都有「開啟資料夾」，會直接在檔案總管 / Finder 中顯示。
+- 下載佇列裡有檔案的工作都有「在檔案總管／Finder 中顯示」。
+- 「刪除」會把工作連同已下載的檔案、可續傳的暫存一起永久刪除（不會放到資源回收筒），按下後會先詢問。
+- 模式、畫質、格式與進階選項會記住，下次開啟沿用。
 - 用 `YT-Downloader --server` 啟動時只執行引擎、不開視窗，可以改用瀏覽器開 http://127.0.0.1:8765。
 
 **yt-dlp 自動更新**：YouTube 常改版，App 會在啟動時與每 6 小時檢查 PyPI，有新版就在背景下載，放在資料夾裡的 `ytdlp/`。下次開啟 App 就會使用新版；也可以按右上角「重新啟動以套用」立即套用。
@@ -74,10 +76,12 @@ start.bat      # Windows
 ```bash
 pip install -r requirements-app.txt
 python build_app.py      # Windows：dist/YT-Downloader-Setup-Windows.exe（需要 Inno Setup 6）；macOS：dist/YT-Downloader-macOS-*.dmg
-python desktop.py        # 開發時直接開 App 視窗
+python native_app.py     # 開發時直接開 App 視窗（PySide6 原生介面）
 ```
 
-- `build_app.py` 會下載對應平台的 FFmpeg / ffprobe / Deno 一起打包。
+- App 介面是 PySide6（Qt）原生元件，`server.py` 引擎在同一個程序的背景執行；打包時排除了用不到的 Qt 模組（WebEngine、QML、Multimedia 等）。
+- `build_app.py` 會下載對應平台的 FFmpeg / ffprobe / Deno 一起打包；`index.html` 也會打包，App 執行時可以用瀏覽器開 http://127.0.0.1:8765 使用網頁版。
+- App 的命令列參數（`app_boot.py`）：`--server` 只跑引擎不開視窗、`--smoke-test` 開視窗幾秒後自動結束（搭配 `QT_QPA_PLATFORM=offscreen` 可在沒有螢幕的環境測試）。
 - App 圖示由 `assets/make_icon.py` 產生（需要 Pillow）。
 - 發布新版：修改 `VERSION`（例如 `1.0.1`）並 push 到 `main`。`.github/workflows/release.yml` 會在 Windows 與 macOS 上打包，實際安裝並做啟動測試後，發布 `v<版本>` 到 Releases。也可以在 Actions 頁面手動執行；同一版只會發布一次。
 

@@ -89,6 +89,48 @@ jobs:
             "$RUNNER_TEMP/whl" "$RUNNER_TEMP/overlay"
           "$exe" --check-ytdlp "$RUNNER_TEMP/overlay"
           test -f "$RUNNER_TEMP/overlay/OK"
+          # 載入失敗的新版：要很快回報失敗（結束碼非 0），不能跳出錯誤視窗卡住背景的自動更新
+          mkdir -p "$RUNNER_TEMP/bad/yt_dlp"
+          echo 'raise ImportError("broken on purpose")' > "$RUNNER_TEMP/bad/yt_dlp/__init__.py"
+          "$exe" --check-ytdlp "$RUNNER_TEMP/bad" & pid=$!
+          for i in $(seq 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+          if kill -0 "$pid" 2>/dev/null; then echo "::error::--check-ytdlp 遇到壞掉的版本時卡住"; kill "$pid"; exit 1; fi
+          if wait "$pid"; then echo "::error::壞掉的 yt-dlp 被當成可用"; exit 1; fi
+          test ! -f "$RUNNER_TEMP/bad/OK"
+      - name: GUI smoke test the installed app
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen  # CI 沒有螢幕：Qt 畫在記憶體裡
+          YTDL_PORT: "8798"
+          YTDL_AUTO_UPDATE: "0"
+        run: |
+          exe="$APP_EXE"
+          if command -v cygpath >/dev/null; then exe=$(cygpath -u "$APP_EXE"); fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # 毛玻璃側邊欄需要 PyObjC；缺了 App 只會默默退回一般外觀，所以在這裡確認有打包進去
+            app="${APP_EXE%/Contents/MacOS/*}"
+            for mod in _objc _AppKit; do
+              find "$app" -name "$mod*.so" | grep -q . || { echo "::error::App 裡沒有 $mod（PyObjC）"; exit 1; }
+            done
+          fi
+          # --smoke-test：主視窗顯示後幾秒自動結束，結束碼 0 表示介面正常建立（沒有當掉）
+          out="$RUNNER_TEMP/smoke.log"
+          YTDL_DOWNLOAD_DIR="$RUNNER_TEMP/dl" "$exe" --smoke-test > "$out" 2>&1 &
+          pid=$!
+          for i in $(seq 120); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+          status=0
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "::error::App 在 120 秒內沒有自己結束"; kill "$pid" || true; status=1
+          else
+            wait "$pid" || status=$?
+          fi
+          # 有繼承到輸出就寫在 smoke.log；沒有主控台時改寫在使用者資料夾的 engine.log
+          if [ "$RUNNER_OS" = "Windows" ]; then log="$LOCALAPPDATA/YT-Downloader/engine.log"
+          else log="$HOME/Library/Application Support/YT-Downloader/engine.log"; fi
+          grep -v "GET /api/" "$out" || true
+          tail -n 40 "$log" 2>/dev/null || true
+          if ! grep -qs "smoke test: [1-9]" "$out" "$log"; then echo "::error::沒有看到主視窗"; status=1; fi
+          exit "$status"
       - uses: actions/upload-artifact@v4
         with:
           name: app-${{ matrix.os }}

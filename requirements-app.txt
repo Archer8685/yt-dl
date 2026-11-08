@@ -1,4 +1,7 @@
-# 打包桌面 App 用（python build_app.py）
+# 打包桌面 App 用（python build_app.py）；開發時也可以直接 python native_app.py
 -r requirements.txt
-pywebview>=6.0
+# 介面只用到 QtCore / QtGui / QtWidgets / QtNetwork：裝 Essentials 就好，不用 WebEngine 等附加模組
+PySide6-Essentials>=6.7
+# macOS：原生元件與毛玻璃側邊欄（native_app.mac_window_setup）
+pyobjc-framework-Cocoa; sys_platform == "darwin"
 pyinstaller>=6.0
