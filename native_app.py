@@ -1465,18 +1465,20 @@ def mac_window_setup(win: QMainWindow) -> bool:
             NSVisualEffectStateFollowsWindowActiveState,
             NSVisualEffectView,
             NSWindowBelow,
-            NSWindowStyleMaskFullSizeContentView,
             NSWindowTitleHidden,
         )
     except ImportError:
         return False
     try:
-        # 一定要在 winId() 建立原生視窗之前設定，Qt 才會把內容畫在透明的 contentView 上
+        # 都要在 winId() 建立原生視窗之前設定：
+        # ExpandedClientAreaHint 讓內容延伸到標題列底下，而且 Qt 知道這件事（版面從視窗最上方開始排，
+        # 自己改 NSWindow 的 styleMask 的話 Qt 不知道，標題列那一條會是空的黑帶）；
+        # NoTitleBarBackgroundHint 讓標題列透明；WA_TranslucentBackground 讓毛玻璃透得出來
+        win.setWindowFlag(Qt.ExpandedClientAreaHint, True)
+        win.setWindowFlag(Qt.NoTitleBarBackgroundHint, True)
         win.setAttribute(Qt.WA_TranslucentBackground)
         nswin = objc.objc_object(c_void_p=int(win.winId())).window()
-        nswin.setStyleMask_(nswin.styleMask() | NSWindowStyleMaskFullSizeContentView)
-        nswin.setTitlebarAppearsTransparent_(True)
-        nswin.setTitleVisibility_(NSWindowTitleHidden)
+        nswin.setTitleVisibility_(NSWindowTitleHidden)  # 標題改顯示在自己的工具列
         content = nswin.contentView()
         height = content.frame().size.height
         fx = NSVisualEffectView.alloc().initWithFrame_(((0, 0), (SIDEBAR_W, height)))

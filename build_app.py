@@ -179,8 +179,11 @@ if sys.platform == "darwin":
     app = BUNDLE(coll, name={name!r} + ".app", icon={icon!r}, bundle_identifier={bundle_id!r},
                  info_plist={{"CFBundleDisplayName": {display!r}, "CFBundleShortVersionString": {version!r},
                               "CFBundleVersion": {version!r}, "NSHighResolutionCapable": True,
-                              "NSRequiresAquaSystemAppearance": False}})
+                              "NSRequiresAquaSystemAppearance": False,
+                              "NSLocalNetworkUsageDescription": {local_net!r}}})
 """
+# macOS 15 起，程式碰到網路功能時系統可能詢問「允許尋找區域網路上的裝置」；這段文字會顯示在詢問視窗裡
+LOCAL_NET_REASON = "YT 下載器的視窗和背景的下載引擎在這台電腦上透過本機連線溝通，不會連到區域網路上的其他裝置。"
 
 
 def pyinstaller():
@@ -205,6 +208,7 @@ def pyinstaller():
               "pyside6/qt6opengl.dll"],
         keep_imageformats=["qjpeg", "qwebp", "qgif", "qico", "qsvg"],  # 縮圖是 JPEG / WebP；PNG 內建
         keep_platforms=["qwindows", "qcocoa", "qoffscreen"],  # qoffscreen：CI 沒有螢幕時的煙霧測試
+        local_net=LOCAL_NET_REASON,
     ), encoding="utf-8")
     shutil.rmtree(DIST / NAME, ignore_errors=True)
     shutil.rmtree(DIST / f"{NAME}.app", ignore_errors=True)
