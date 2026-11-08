@@ -219,19 +219,41 @@ def test_clip_range_only_blocks_media_modes(app):
     page.advanced.sections_edit.clear()
 
 
-def test_basic_choices_are_remembered(app):
-    page = na.DownloadPage(FakeApi(), lambda *a, **k: None)
-    page.on_info(video_info("V", "v", heights=(2160, 1080, 720)))
-    page.mode.set_value("audio")
-    page.mode.changed.emit("audio")
-    page.acodec.select("flac")
-    page.mode.set_value("av")
-    page.mode.changed.emit("av")
-    page.quality.select(720)
-    again = na.DownloadPage(FakeApi(), lambda *a, **k: None)
-    assert again.mode.value() == "av" and again.acodec.currentData() == "flac"
-    again.on_info(video_info("W", "w", heights=(1080, 720)))
-    assert again.quality.currentData() == 720
+def test_download_defaults_from_settings(app, monkeypatch):
+    """設定頁的「下載預設值」：存起來、立刻套用到新增下載頁，下次開啟也從這組選項開始。"""
+    api = FakeApi()
+    win = na.MainWindow(api, lambda: False)
+    s, page = win.settings, win.download
+    try:
+        page.on_info(video_info("V", "v", heights=(2160, 1080, 720)))
+        s.def_mode.select("audio")
+        s.def_acodec.select("flac")
+        s.def_quality.select(720)
+        s.def_playlist.setChecked(True)
+        assert page.mode.value() == "audio" and page.acodec.currentData() == "flac"  # 立刻套用
+        assert page.quality.currentData() == 720 and page.as_playlist.isChecked()
+        assert na.load_download_defaults()["quality"] == 720
+        fresh = na.DownloadPage(FakeApi(), lambda *a, **k: None)  # 重新開啟 App
+        assert fresh.mode.value() == "audio" and fresh.acodec.currentData() == "flac"
+        fresh.on_info(video_info("W", "w", heights=(1080, 720)))
+        assert fresh.quality.currentData() == 720
+        low = na.DownloadPage(FakeApi(), lambda *a, **k: None)
+        low.on_info(video_info("L", "l", heights=(480,)))  # 影片沒有預設畫質：用最佳畫質
+        assert low.quality.currentData() is None
+        # 在新增下載頁臨時改選，不會改到預設值
+        page.mode.set_value("av")
+        page.mode.changed.emit("av")
+        assert na.load_download_defaults()["mode"] == "audio"
+        # 恢復所有預設值（按下確認）
+        monkeypatch.setattr(QMessageBox, "exec", lambda box: next(
+            b for b in box.buttons() if b.text() == "恢復預設值").click())
+        s.reset_all()
+        assert na.load_download_defaults() == na.DOWNLOAD_DEFAULTS
+        assert page.mode.value() == "av" and s.def_quality.currentData() is None
+        assert na.ui_prefs() == ("system", "medium")
+    finally:
+        na.save_download_defaults(dict(na.DOWNLOAD_DEFAULTS))
+        win.close()
 
 
 # --------------------------------------------------------------------------- #
@@ -402,3 +424,108 @@ def test_engine_check_shows_hint_when_not_reachable(app, monkeypatch):
     api.last("/api/meta")[3]({"version": "2026.10.26", "latest": "2026.10.26", "ffmpeg": True})
     assert win.engine_banner.isHidden()
     win.close()
+
+
+# --------------------------------------------------------------------------- #
+#  外觀、文字大小
+# --------------------------------------------------------------------------- #
+def test_appearance_choice_is_saved_and_applied(app):
+    from PySide6.QtGui import QPalette
+    api = FakeApi()
+    win = na.MainWindow(api, lambda: False)
+    page = win.settings
+    seen = []
+    page.appearance_changed.connect(lambda: seen.append(na.ui_prefs()))
+    try:
+        page.theme.set_value("dark")
+        page.theme.changed.emit("dark")
+        page.font_size.set_value("large")
+        page.font_size.changed.emit("large")
+        assert seen[-1] == ("dark", "large")
+        na.apply_theme(app, win, "")
+        if not na.IS_MAC:
+            assert app.font().pixelSize() == round(13 * na.FONT_SCALE["large"])
+            assert app.palette().color(QPalette.Window) == QColor(na.tokens(True)["bg"])
+        assert f"font-size: {round(15 * na.FONT_SCALE['large'])}px" in app.styleSheet()
+        again = na.SettingsPage(api, lambda *a, **k: None)  # 重新開啟 App 時選項還在
+        assert again.theme.value() == "dark" and again.font_size.value() == "large"
+    finally:
+        na.save_ui_prefs("system", "medium")
+        na.apply_theme(app, win, "", dark=False)
+        win.close()
+
+
+# --------------------------------------------------------------------------- #
+#  YouTube Premium
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def premium_page(app):
+    na.settings_store().remove("premium/status")
+    api = FakeApi()
+    adv = native_options.AdvancedOptions(api)
+    toasts = []
+    page = na.SettingsPage(api, lambda text, error=False: toasts.append(text), adv)
+    yield page, api, adv, toasts
+    na.settings_store().remove("premium/status")
+
+
+def test_premium_check_uses_uploaded_cookies_and_enables_premium(premium_page):
+    page, api, adv, toasts = premium_page
+    assert page.premium_status.text() == "尚未檢查"
+    adv.cookie_exists = True  # 已上傳 cookies.txt，但沒選 Cookie 來源（例如從舊版升級）
+    adv.cookie_source.setCurrentIndex(adv.cookie_source.findData(""))
+    adv.premium.setChecked(False)
+    page.check_premium()
+    call = api.last("/api/auth/test")
+    assert call[2]["network"]["cookies_file"] is True
+    assert not page.premium_check.isEnabled()
+    call[3]({"logged_in": True, "premium": True, "expired": False})
+    assert page.premium_status.text() == "Premium ✓" and page.premium_check.isEnabled()
+    assert adv.premium.isChecked() and "Premium" in toasts[-1]
+    again = na.SettingsPage(FakeApi(), lambda *a, **k: None, adv)  # 重新開啟也看得到上次的結果
+    assert again.premium_status.text() == "Premium ✓" and "上次檢查" in again.premium_detail.text()
+
+
+@pytest.mark.parametrize("reply,status", [
+    ({"logged_in": True, "premium": False, "expired": False}, "已登入（非 Premium）"),
+    ({"logged_in": False, "premium": False, "expired": True}, "Cookie 已過期"),
+    ({"logged_in": False, "premium": False, "expired": False}, "未登入"),
+])
+def test_premium_status_texts(premium_page, reply, status):
+    page, api, adv, _ = premium_page
+    adv.cookie_exists = True
+    page.check_premium()
+    api.last("/api/auth/test")[3](reply)
+    assert page.premium_status.text() == status
+
+
+def test_premium_check_without_cookies_explains(premium_page):
+    page, api, adv, _ = premium_page
+    adv.cookie_exists = False
+    adv.cookie_source.setCurrentIndex(adv.cookie_source.findData(""))
+    page.check_premium()
+    assert not [c for c in api.calls if c[1] == "/api/auth/test"]
+    assert page.premium_status.text() == "無法檢查" and "cookies.txt" in page.premium_detail.text()
+
+
+def test_premium_check_error_is_shown(premium_page):
+    page, api, adv, _ = premium_page
+    adv.cookie_exists = True
+    page.check_premium()
+    api.last("/api/auth/test")[4]("無法讀取 Chrome 的 Cookie")
+    assert page.premium_status.text() == "無法檢查" and "Chrome" in page.premium_detail.text()
+    assert page.premium_check.isEnabled()
+
+
+def test_update_cookies_uploads_then_rechecks(premium_page, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    page, api, adv, _ = premium_page
+    f = tmp_path / "cookies.txt"
+    f.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(f), ""))
+    page.update_cookies()
+    up = api.last("/api/cookies")
+    assert up[0] == "POST" and "Netscape" in up[2]["text"]
+    up[3]({"exists": True})
+    assert adv.network()["cookies_file"] is True
+    assert api.last("/api/auth/test")  # 上傳成功後自動重新檢查

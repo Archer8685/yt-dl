@@ -91,14 +91,34 @@ def tokens(dark: bool) -> dict[str, str]:
             "button_pressed": "#EDEDED", "focus": "#80007AFF"}
 
 
-def ui_font() -> QFont:
-    """macOS：系統字型（SF Pro + 蘋方）13 pt。Windows：Segoe UI Variable + 微軟正黑體，換算成同樣的 13 px 視覺大小。"""
+THEMES = [("system", "跟隨系統"), ("light", "淺色"), ("dark", "深色")]
+FONT_SIZES = [("small", "小"), ("medium", "中"), ("large", "大")]
+FONT_SCALE = {"small": 0.88, "medium": 1.0, "large": 1.18}
+
+
+def ui_prefs() -> tuple[str, str]:
+    """外觀設定（主題、文字大小），存在 QSettings 的 ui 群組。"""
+    st = settings_store()
+    theme, size = st.value("ui/theme", "system"), st.value("ui/font", "medium")
+    return (theme if theme in dict(THEMES) else "system", size if size in FONT_SCALE else "medium")
+
+
+def save_ui_prefs(theme: str, size: str):
+    st = settings_store()
+    st.setValue("ui/theme", theme)
+    st.setValue("ui/font", size)
+
+
+def ui_font(scale: float = 1.0) -> QFont:
+    """macOS：系統字型（SF Pro + 蘋方）13 pt。Windows：Segoe UI Variable + 微軟正黑體，換算成同樣的 13 px 視覺大小。
+    scale：文字大小設定（小 / 中 / 大）。"""
     f = QFont()
+    size = round(13 * scale)
     if IS_MAC:
-        f.setPointSizeF(13)
+        f.setPointSizeF(size)
     else:
         f.setFamilies(["Segoe UI Variable Text", "Segoe UI", "Microsoft JhengHei UI", "Microsoft JhengHei"])
-        f.setPixelSize(13)
+        f.setPixelSize(size)
     return f
 
 
@@ -136,8 +156,10 @@ def _controls_qss(t: dict[str, str], chevron: str) -> str:
     """
 
 
-def stylesheet(t: dict[str, str], chevron: str) -> str:
-    """版面與容器的樣式（兩個平台都用）；Windows 再加上模仿 macOS 的控制項樣式。"""
+def stylesheet(t: dict[str, str], chevron: str, scale: float = 1.0) -> str:
+    """版面與容器的樣式（兩個平台都用）；Windows 再加上模仿 macOS 的控制項樣式。scale：文字大小設定。"""
+    def px(n: int) -> int:
+        return round(n * scale)
     base = f"""
     #content {{ background: {t['bg']}; }}
     QLabel {{ background: transparent; }}
@@ -146,15 +168,19 @@ def stylesheet(t: dict[str, str], chevron: str) -> str:
                   min-height: 20px; }}
     #navButton:checked {{ background: {t['select']}; }}
     #toolbar {{ background: {t['toolbar']}; border-bottom: 1px solid {t['sep']}; }}
-    #toolbarTitle {{ font-size: 15px; font-weight: 700; }}
-    #toolbarSubtitle {{ color: {t['secondary']}; font-size: 11px; }}
+    #toolbarTitle {{ font-size: {px(15)}px; font-weight: 700; }}
+    #toolbarSubtitle {{ color: {t['secondary']}; font-size: {px(11)}px; }}
     #subtitle {{ color: {t['secondary']}; }}
+    #hint {{ color: {t['secondary']}; font-size: {px(11)}px; }}
+    QLineEdit[mono="true"] {{ font-family: "SF Mono", "Menlo", "Cascadia Mono", "Consolas", monospace; }}
     #errorText {{ color: {t['red']}; }}
+    #okText {{ color: {t['green']}; font-weight: 600; }}
+    #warnText {{ color: {t['orange']}; font-weight: 600; }}
     #sectionHeader {{ font-weight: 700; padding-left: 2px; }}
     #card {{ background: {t['card']}; border: 1px solid {t['sep']}; border-radius: 10px; }}
     #row {{ background: transparent; }}
     #hairline {{ background: {t['sep']}; max-height: 1px; min-height: 1px; border: none; }}
-    #videoTitle {{ font-size: 15px; font-weight: 600; }}
+    #videoTitle {{ font-size: {px(15)}px; font-weight: 600; }}
     #rowTitle {{ font-weight: 600; }}
     #link {{ background: transparent; border: none; color: {t['accent']}; padding: 0 2px; min-height: 0; }}
     #destructiveLink {{ background: transparent; border: none; color: {t['red']}; padding: 0 2px; min-height: 0; }}
@@ -528,12 +554,42 @@ def settings_store() -> QSettings:
     return QSettings(SETTINGS_ORG, SETTINGS_APP)
 
 
+# 下載預設值：每次開啟 App 的「新增下載」都從這組選項開始（在「設定 → 下載預設值」修改）
+DOWNLOAD_DEFAULTS = {"mode": "av", "quality": None, "container": "mp4", "acodec": "mp3", "aquality": "0",
+                     "as_playlist": False}
+
+
+def load_download_defaults() -> dict:
+    st = settings_store()
+    st.beginGroup("defaults")
+    d = dict(DOWNLOAD_DEFAULTS)
+    mode = st.value("mode", d["mode"])
+    d["mode"] = mode if mode in dict(MODES) else d["mode"]
+    q = st.value("quality", "")
+    d["quality"] = int(q) if str(q).isdigit() and int(q) in dict(QUALITIES) else None
+    for key, choices in (("container", CONTAINERS), ("acodec", AUDIO_CODECS), ("aquality", AUDIO_QUALITY)):
+        v = st.value(key, d[key])
+        d[key] = v if v in dict(choices) else d[key]
+    pl = st.value("as_playlist", False)
+    d["as_playlist"] = pl.lower() == "true" if isinstance(pl, str) else bool(pl)
+    st.endGroup()
+    return d
+
+
+def save_download_defaults(d: dict):
+    st = settings_store()
+    st.beginGroup("defaults")
+    for k, default in DOWNLOAD_DEFAULTS.items():
+        v = d.get(k, default)
+        st.setValue(k, "" if v is None else v)
+    st.endGroup()
+
+
 # --------------------------------------------------------------------------- #
 #  頁面：新增下載
 # --------------------------------------------------------------------------- #
 class DownloadPage(QWidget):
     queued = Signal()
-    PREFS = "basic"  # QSettings 群組：模式、畫質、格式等基本選項，下次開啟沿用
 
     def __init__(self, api: Api, toast):
         super().__init__()
@@ -638,45 +694,29 @@ class DownloadPage(QWidget):
         lay.addStretch()
 
         self._saved_quality = None
-        self.restore_prefs()
+        self.apply_defaults()
         for w in (self.quality, self.container, self.acodec, self.aquality):
             w.currentIndexChanged.connect(self.update_rows)
-        self.mode.changed.connect(self.save_prefs)
-        for w in (self.quality, self.container, self.acodec, self.aquality):
-            w.currentIndexChanged.connect(self.save_prefs)
-        self.as_playlist.toggled.connect(self.save_prefs)
         self.set_loaded(False)
 
-    # ---------- 基本選項的儲存 ----------
-    def restore_prefs(self):
-        st = settings_store()
-        st.beginGroup(self.PREFS)
-        mode = st.value("mode", "av")
-        if mode in self.mode.buttons:
-            self.mode.set_value(mode)
-        self.container.select(st.value("container", "mp4"))
-        self.acodec.select(st.value("acodec", "mp3"))
-        self.aquality.select(st.value("aquality", "0"))
-        q = st.value("quality", "")
-        self._saved_quality = int(q) if str(q).isdigit() else None
-        pl = st.value("as_playlist", False)
+    # ---------- 下載預設值（在「設定 → 下載預設值」調整） ----------
+    def apply_defaults(self, d: dict | None = None):
+        """套用預設的模式、畫質、格式：App 開啟時，以及在設定頁改了預設值時。"""
+        d = d or load_download_defaults()
+        if d["mode"] in self.mode.buttons:
+            self.mode.set_value(d["mode"])
+        self.container.select(d["container"])
+        self.acodec.select(d["acodec"])
+        self.aquality.select(d["aquality"])
+        self._saved_quality = d["quality"]
+        # 已經解析過影片：沒有這個畫質（影片解析度較低）時用最佳畫質
+        if self.quality.count() and not self.quality.select(d["quality"]):
+            self.quality.setCurrentIndex(0)
         self.as_playlist.blockSignals(True)
-        self.as_playlist.setChecked(pl.lower() == "true" if isinstance(pl, str) else bool(pl))
+        self.as_playlist.setChecked(d["as_playlist"])
         self.as_playlist.blockSignals(False)
-        st.endGroup()
-
-    def save_prefs(self, *_):
-        if self.quality.count():  # 還沒解析過時畫質選單是空的，不要蓋掉上次的選擇
-            self._saved_quality = self.quality.currentData()
-        st = settings_store()
-        st.beginGroup(self.PREFS)
-        st.setValue("mode", self.mode.value())
-        st.setValue("quality", self._saved_quality or "")
-        st.setValue("container", self.container.currentData())
-        st.setValue("acodec", self.acodec.currentData())
-        st.setValue("aquality", self.aquality.currentData())
-        st.setValue("as_playlist", self.as_playlist.isChecked())
-        st.endGroup()
+        if self.info:
+            self.update_rows()
 
     def apply_theme(self, t: dict[str, str]):
         self.advanced.apply_theme(t)
@@ -1094,11 +1134,64 @@ class QueuePage(QWidget):
 # --------------------------------------------------------------------------- #
 class SettingsPage(QWidget):
     meta_changed = Signal(dict)
+    appearance_changed = Signal()  # 外觀或文字大小改了：主程式重新套用樣式
+    defaults_changed = Signal(dict)  # 下載預設值改了：「新增下載」頁立刻套用
 
-    def __init__(self, api: Api, toast):
+    def __init__(self, api: Api, toast, advanced=None):
         super().__init__()
         self.api, self.toast = api, toast
+        self.advanced = advanced  # 進階選項面板：Cookie 來源與「Premium 高位元率」開關在那裡
         lay = page_layout(self)
+
+        # 外觀
+        lay.addWidget(label("外觀", "sectionHeader"))
+        look = Card()
+        theme, size = ui_prefs()
+        self.theme = Segmented(THEMES)
+        self.theme.set_value(theme)
+        self.font_size = Segmented(FONT_SIZES)
+        self.font_size.set_value(size)
+        self.theme.changed.connect(self._appearance_changed)
+        self.font_size.changed.connect(self._appearance_changed)
+        look.add(form_row("主題", self.theme))
+        look.add(form_row("文字大小", self.font_size))
+        lay.addWidget(look)
+
+        # 下載預設值：每次開啟 App，「新增下載」都從這些選項開始
+        lay.addSpacing(8)
+        head = QHBoxLayout()
+        head.addWidget(label("下載預設值", "sectionHeader"))
+        head.addStretch()
+        reset_all = QPushButton("恢復所有預設值")
+        reset_all.setObjectName("link")
+        reset_all.clicked.connect(self.reset_all)
+        head.addWidget(reset_all)
+        lay.addLayout(head)
+        from native_options import Switch
+        defaults = Card()
+        self.def_mode = PopUp(MODES)
+        self.def_quality = PopUp([(None, "最佳畫質")] + QUALITIES)
+        self.def_container = PopUp(CONTAINERS)
+        self.def_acodec = PopUp(AUDIO_CODECS)
+        self.def_aquality = PopUp(AUDIO_QUALITY)
+        self.def_playlist = Switch(False)
+        for w in (self.def_mode, self.def_quality, self.def_container, self.def_acodec, self.def_aquality):
+            w.setMinimumWidth(170)  # 同一張卡片裡的選單一樣寬，比較整齊
+        defaults.add(form_row("下載模式", self.def_mode))
+        defaults.add(form_row("畫質", self.def_quality))
+        defaults.add(form_row("影片格式", self.def_container))
+        defaults.add(form_row("音訊格式（僅音訊時）", self.def_acodec))
+        defaults.add(form_row("音質（MP3 / M4A 等）", self.def_aquality))
+        defaults.add(form_row("網址含播放清單時下載整個清單", self.def_playlist))
+        lay.addWidget(defaults)
+        lay.addWidget(label("影片解析度比預設畫質低時會自動用最佳畫質。字幕、剪輯、中繼資料等進階選項"
+                            "在「新增下載 → 進階選項」調整，會記住上次的設定。", "hint", wrap=True))
+        self.show_defaults(load_download_defaults())
+        for w in (self.def_mode, self.def_quality, self.def_container, self.def_acodec, self.def_aquality):
+            w.currentIndexChanged.connect(self._defaults_changed)
+        self.def_playlist.toggled.connect(self._defaults_changed)
+
+        lay.addSpacing(8)
         lay.addWidget(label("儲存位置", "sectionHeader"))
         card = Card()
         self.folder = ElidedLabel("subtitle")
@@ -1126,6 +1219,39 @@ class SettingsPage(QWidget):
         card.add(row)
         lay.addWidget(card)
 
+        # YouTube Premium：用目前的 Cookie 檢查登入的帳號，Cookie 過期時可以直接上傳新的
+        lay.addSpacing(8)
+        lay.addWidget(label("YouTube Premium", "sectionHeader"))
+        prem = Card()
+        prow = QWidget()
+        pl = QVBoxLayout(prow)
+        pl.setContentsMargins(14, 10, 14, 10)
+        pl.setSpacing(4)
+        top = QHBoxLayout()
+        top.addWidget(label("帳號狀態"))
+        top.addStretch()
+        self.premium_status = label("", None, plain=True)
+        top.addWidget(self.premium_status)
+        pl.addLayout(top)
+        self.premium_detail = label("", "hint", wrap=True, plain=True)
+        pl.addWidget(self.premium_detail)
+        pbtns = QHBoxLayout()
+        pbtns.setContentsMargins(0, 6, 0, 0)
+        self.premium_check = QPushButton("重新檢查")
+        self.premium_check.clicked.connect(self.check_premium)
+        self.premium_upload = QPushButton("更新 cookies.txt…")
+        self.premium_upload.clicked.connect(self.update_cookies)
+        pbtns.addWidget(self.premium_check)
+        pbtns.addWidget(self.premium_upload)
+        pbtns.addStretch()
+        pl.addLayout(pbtns)
+        prem.add(prow)
+        lay.addWidget(prem)
+        lay.addWidget(label("用瀏覽器匯出的 cookies.txt（或「新增下載 → 進階選項 → 網路」選的 Cookie 來源）"
+                            "檢查登入的帳號是否有 Premium。Cookie 過期時重新匯出、按「更新 cookies.txt…」即可。",
+                            "hint", wrap=True))
+        self.show_premium(self.saved_premium())
+
         lay.addSpacing(8)
         lay.addWidget(label("下載元件", "sectionHeader"))
         card2 = Card()
@@ -1149,6 +1275,137 @@ class SettingsPage(QWidget):
         lay.addWidget(a)
         lay.addWidget(b)
         return w
+
+    # ---------- 外觀 ----------
+    def _appearance_changed(self, *_):
+        save_ui_prefs(self.theme.value(), self.font_size.value())
+        self.appearance_changed.emit()
+
+    # ---------- 下載預設值 ----------
+    def show_defaults(self, d: dict):
+        widgets = (self.def_mode, self.def_quality, self.def_container, self.def_acodec, self.def_aquality,
+                   self.def_playlist)
+        for w in widgets:
+            w.blockSignals(True)
+        self.def_mode.select(d["mode"])
+        if not self.def_quality.select(d["quality"]):
+            self.def_quality.setCurrentIndex(0)
+        self.def_container.select(d["container"])
+        self.def_acodec.select(d["acodec"])
+        self.def_aquality.select(d["aquality"])
+        self.def_playlist.setChecked(d["as_playlist"])
+        for w in widgets:
+            w.blockSignals(False)
+
+    def current_defaults(self) -> dict:
+        return {"mode": self.def_mode.currentData(), "quality": self.def_quality.currentData(),
+                "container": self.def_container.currentData(), "acodec": self.def_acodec.currentData(),
+                "aquality": self.def_aquality.currentData(), "as_playlist": self.def_playlist.isChecked()}
+
+    def _defaults_changed(self, *_):
+        d = self.current_defaults()
+        save_download_defaults(d)
+        self.defaults_changed.emit(d)
+
+    def reset_all(self):
+        """外觀、下載預設值、進階選項全部恢復成剛安裝時的設定（不動儲存位置、cookies.txt 與下載的檔案）。"""
+        box = QMessageBox(self.window())
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(TITLE)
+        box.setText("要恢復所有預設值嗎？")
+        box.setInformativeText("外觀、文字大小、下載預設值和進階選項會恢復成剛安裝時的設定。"
+                               "儲存位置、cookies.txt 和已下載的檔案不受影響。")
+        ok = box.addButton("恢復預設值", QMessageBox.AcceptRole)
+        box.setDefaultButton(box.addButton("取消", QMessageBox.RejectRole))
+        box.exec()
+        if box.clickedButton() is not ok:
+            return
+        self.theme.set_value("system")
+        self.font_size.set_value("medium")
+        self._appearance_changed()
+        self.show_defaults(dict(DOWNLOAD_DEFAULTS))
+        self._defaults_changed()
+        if self.advanced is not None:
+            self.advanced.reset()
+        self.toast("已恢復所有預設值")
+
+    # ---------- YouTube Premium ----------
+    @staticmethod
+    def saved_premium() -> dict:
+        try:
+            return json.loads(settings_store().value("premium/status", "") or "{}")
+        except ValueError:
+            return {}
+
+    def show_premium(self, s: dict):
+        """顯示上次檢查的結果（App 重新開啟也看得到）。"""
+        style = "warnText"
+        if s.get("error"):
+            text, detail, style = "無法檢查", s["error"], "errorText"
+        elif not s:
+            text, detail, style = "尚未檢查", "按「重新檢查」確認目前的 Cookie 是否登入、是否有 Premium。", "subtitle"
+        elif s.get("expired"):
+            text, detail = "Cookie 已過期", "請在瀏覽器重新登入 YouTube、重新匯出 cookies.txt 後按「更新 cookies.txt…」。"
+        elif not s.get("logged_in"):
+            text, detail = "未登入", "這組 Cookie 沒有登入 YouTube，請在登入狀態下重新匯出 cookies.txt。"
+        elif s.get("premium"):
+            text, detail, style = "Premium ✓", "已偵測到 YouTube Premium，可以下載 Premium 專屬的高位元率畫質。", "okText"
+        else:
+            text, detail, style = "已登入（非 Premium）", "已登入 YouTube，但這個帳號沒有 Premium。", "subtitle"
+        if s.get("checked"):
+            detail += f"　上次檢查：{s['checked']}"
+        self.premium_status.setObjectName(style)
+        self.premium_status.style().unpolish(self.premium_status)
+        self.premium_status.style().polish(self.premium_status)
+        self.premium_status.setText(text)
+        self.premium_detail.setText(detail)
+
+    def _save_premium(self, s: dict):
+        from datetime import datetime
+        s = {**s, "checked": datetime.now().strftime("%Y/%m/%d %H:%M")}
+        settings_store().setValue("premium/status", json.dumps(s, ensure_ascii=False))
+        self.show_premium(s)
+
+    def check_premium(self):
+        adv = self.advanced
+        if adv is None:
+            return
+        net = adv.network()
+        if not (net.get("cookies_file") or net.get("cookies_browser")):
+            if not adv.cookie_exists:
+                self.show_premium({"error": "還沒有 Cookie：請按「更新 cookies.txt…」上傳從瀏覽器匯出的 cookies.txt。"})
+                return
+            # 已經上傳過 cookies.txt 但沒選來源（例如從舊版升級）：檢查時直接用它
+            adv.cookie_source.setCurrentIndex(adv.cookie_source.findData("file"))
+            net = adv.network()
+        self.premium_check.setEnabled(False)
+        self.premium_check.setText("檢查中…")
+
+        def done():
+            self.premium_check.setEnabled(True)
+            self.premium_check.setText("重新檢查")
+
+        def ok(r):
+            done()
+            self._save_premium({"logged_in": bool(r.get("logged_in")), "premium": bool(r.get("premium")),
+                                "expired": bool(r.get("expired"))})
+            if r.get("premium") and not adv.premium.isChecked():
+                adv.premium.setChecked(True)  # 和網頁版一樣：偵測到 Premium 就優先選高位元率
+                self.toast("已偵測到 YouTube Premium，已開啟「Premium 高位元率」")
+
+        def err(msg):
+            done()
+            self._save_premium({"error": msg})
+
+        # 檢查要實際向 YouTube 讀一部影片，通常幾秒、慢的時候一兩分鐘
+        self.api.post("/api/auth/test", {"network": net}, ok, err, timeout_ms=180_000)
+
+    def update_cookies(self):
+        if self.advanced is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "選擇 cookies.txt", "", "Cookie 檔 (*.txt);;所有檔案 (*)")
+        if path:
+            self.advanced.upload_cookies(Path(path), done=self.check_premium)
 
     def refresh(self):
         self.api.get("/api/settings", self.on_settings, lambda m: self.toast(f"無法讀取設定：{m}", error=True))
@@ -1311,7 +1568,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.download = DownloadPage(api, self.toast)
         self.queue = QueuePage(api, self.toast)
-        self.settings = SettingsPage(api, self.toast)
+        self.settings = SettingsPage(api, self.toast, self.download.advanced)
         self.nav: list[QPushButton] = []
         group = QButtonGroup(self)
         for i, ((text, sym, _), page) in enumerate(zip(PAGES, (self.download, self.queue, self.settings))):
@@ -1356,6 +1613,7 @@ class MainWindow(QMainWindow):
         self.queue.counts.connect(self.on_counts)
         self.queue.online.connect(self.on_online)
         self.settings.meta_changed.connect(self.on_meta)
+        self.settings.defaults_changed.connect(self.download.apply_defaults)
         self._toast_timer = QTimer(self)
         self._toast_timer.setSingleShot(True)
         self._toast_timer.timeout.connect(self.banner.hide)
@@ -1502,10 +1760,15 @@ def mac_window_setup(win: QMainWindow) -> bool:
     return True
 
 
-def apply_theme(app: QApplication, win: MainWindow, chevron: str, dark: bool | None = None):
-    """套用深淺色；dark 未指定時跟隨系統外觀。"""
+def apply_theme(app: QApplication, win: MainWindow, chevron: str, dark: bool | None = None,
+                scale: float | None = None):
+    """套用深淺色與文字大小。dark / scale 未指定時用「設定 → 外觀」的選擇（主題選「跟隨系統」就看系統外觀）。"""
+    theme, size = ui_prefs()
     if dark is None:
-        dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        dark = theme == "dark" if theme != "system" else app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+    if scale is None:
+        scale = FONT_SCALE[size]
+    app.setFont(ui_font(scale))
     t = tokens(dark)
     if not IS_MAC:  # macOS 的原生元件用系統自己的配色
         pal = app.palette()
@@ -1517,8 +1780,17 @@ def apply_theme(app: QApplication, win: MainWindow, chevron: str, dark: bool | N
         pal.setColor(QPalette.Highlight, QColor(t["accent"]))
         pal.setColor(QPalette.PlaceholderText, QColor(t["tertiary"]))
         app.setPalette(pal)
-    app.setStyleSheet(stylesheet(t, chevron))
+    app.setStyleSheet(stylesheet(t, chevron, scale))
     win.apply_theme(t)
+
+
+def apply_appearance(app: QApplication, win: MainWindow, chevron: str):
+    """套用「設定 → 外觀」：指定淺色／深色時也告訴 Qt，macOS 的原生元件才會跟著變；選「跟隨系統」就交回給系統。"""
+    theme, _ = ui_prefs()
+    scheme = {"light": Qt.ColorScheme.Light, "dark": Qt.ColorScheme.Dark}.get(theme, Qt.ColorScheme.Unknown)
+    # 一律設定：即使目前系統剛好也是淺色，也要鎖定成淺色，之後系統改成深色時原生元件才不會跟著變
+    app.styleHints().setColorScheme(scheme)  # 有變化時會觸發 colorSchemeChanged → apply_theme
+    apply_theme(app, win, chevron)
 
 
 def start_engine():
@@ -1574,8 +1846,9 @@ def main():
             f"或查看紀錄檔 {server.ROOT / 'engine.log'}")
     win = MainWindow(Api(url, app), busy, hint)
     mac_window_setup(win)
-    apply_theme(app, win, chevron)
     app.styleHints().colorSchemeChanged.connect(lambda *_: apply_theme(app, win, chevron))
+    win.settings.appearance_changed.connect(lambda: apply_appearance(app, win, chevron))
+    apply_appearance(app, win, chevron)  # 套用上次選的主題與文字大小
     win.show()
     win.start()
     app_boot.install_smoke_test(app)  # --smoke-test：CI 確認視窗能開啟後自動結束

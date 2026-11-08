@@ -32,7 +32,7 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QIntValidator, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QGuiApplication, QIntValidator, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QFileDialog,
@@ -136,24 +136,9 @@ def _color(value: str) -> QColor:
     return QColor(value)
 
 
-def mono_font() -> QFont:
-    """等寬字（檔名範本、代理、時間範圍等輸入框）；用 QFont 設定，不寫 QSS。"""
-    f = QFont()
-    f.setFamilies(["SF Mono", "Menlo", "Cascadia Mono", "Consolas"])
-    f.setStyleHint(QFont.Monospace)
-    return f
-
-
 def _hint(text: str = "", wrap: bool = False) -> QLabel:
-    """灰色說明文字（沿用 native_app 的 "subtitle" 樣式，字級小一號）。"""
-    lb = label(text, "subtitle", wrap)
-    f = lb.font()
-    if f.pixelSize() > 0:  # app 字型可能用 px 設定（macOS 13px），這時 pointSizeF() 是 -1
-        f.setPixelSize(max(f.pixelSize() - 2, 10))
-    else:
-        f.setPointSizeF(max(f.pointSizeF() - 1, 8))
-    lb.setFont(f)
-    return lb
+    """灰色、小一號的說明文字。顏色與字級由 native_app.stylesheet() 的 #hint 決定，會跟著深淺色與文字大小設定。"""
+    return label(text, "hint", wrap)
 
 
 class Switch(QAbstractButton):
@@ -662,7 +647,8 @@ def _field(placeholder: str, width: int = 0, mono: bool = True) -> QLineEdit:
     if width:
         e.setFixedWidth(width)
     if mono:
-        e.setFont(mono_font())
+        # 等寬字由 native_app.stylesheet() 的 QLineEdit[mono="true"] 決定字型，字級跟著 App 的文字大小設定
+        e.setProperty("mono", True)
     return e
 
 
@@ -1109,7 +1095,8 @@ class AdvancedOptions(QWidget):
         if path:
             self.upload_cookies(Path(path))
 
-    def upload_cookies(self, path: Path):
+    def upload_cookies(self, path: Path, done=None):
+        """上傳 cookies.txt 並改用它；成功後呼叫 done()（例如設定頁接著重新檢查 Premium 狀態）。"""
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as e:
@@ -1122,6 +1109,8 @@ class AdvancedOptions(QWidget):
             self._on_cookie_status(r)
             self.cookie_source.setCurrentIndex(self.cookie_source.findData("file"))
             self.toast("已上傳 cookies.txt")
+            if done:
+                done()
 
         self.api.post("/api/cookies", {"text": text}, ok, lambda m: self.toast(f"上傳失敗：{m}", error=True))
 

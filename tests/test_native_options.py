@@ -7,7 +7,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication
 
 import server
@@ -278,18 +278,13 @@ def test_switch_toggles(app):
     assert (sw.sizeHint().width(), sw.sizeHint().height()) == (38, 22)  # macOS 開關尺寸
 
 
-def test_hint_font_with_pixel_sized_app_font(app):
-    from PySide6.QtGui import QFont
-
-    from native_options import _hint
-    old = app.font()
-    f = QFont(old)
-    f.setPixelSize(13)
-    app.setFont(f)
-    try:
-        assert _hint("x").font().pixelSize() == 11
-    finally:
-        app.setFont(old)
+def test_hint_and_mono_follow_app_stylesheet(app):
+    """說明文字與等寬輸入框不能自己寫死字型：要由 App 的樣式表決定，才會跟著「文字大小」設定。"""
+    from native_options import _field, _hint
+    h = _hint("x")
+    assert h.objectName() == "hint" and not h.testAttribute(Qt.WA_SetFont)
+    e = _field("p")
+    assert e.property("mono") is True and not e.testAttribute(Qt.WA_SetFont)
 
 
 def test_theme_colors_parse(app):
