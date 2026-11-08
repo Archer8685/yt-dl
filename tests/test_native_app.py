@@ -126,11 +126,19 @@ def html_server():
 
 
 def test_api_treats_non_json_reply_as_error(app, html_server):
-    api = na.Api(html_server)
+    import shiboken6
+    from PySide6.QtCore import QEvent, QObject
+    owner = QObject()  # 和 App 一樣把網路元件掛在一個父物件下，測試結束就釋放
+    api = na.Api(html_server, owner)
     got = {}
-    api.get("/api/meta", lambda p: got.setdefault("ok", p), lambda m: got.setdefault("err", m))
-    assert wait_until(lambda: got)
-    assert got == {"err": na.NOT_ENGINE}
+    try:
+        api.get("/api/meta", lambda p: got.setdefault("ok", p), lambda m: got.setdefault("err", m))
+        assert wait_until(lambda: got)
+        assert got == {"err": na.NOT_ENGINE}
+    finally:
+        # 不能留到程序結束才讓 Python 回收：macOS 上 QNetworkAccessManager 在 QApplication 之後才被刪會當掉
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        shiboken6.delete(owner)
 
 
 # --------------------------------------------------------------------------- #
