@@ -1477,6 +1477,11 @@ def mac_window_setup(win: QMainWindow) -> bool:
         win.setWindowFlag(Qt.ExpandedClientAreaHint, True)
         win.setWindowFlag(Qt.NoTitleBarBackgroundHint, True)
         win.setAttribute(Qt.WA_TranslucentBackground)
+        # 頂層視窗預設會把標題列高度（安全區域）加進版面邊距，內容又被往下推、頂端留空。
+        # 紅黃綠按鈕的位置已經由側邊欄的上邊距（TOOLBAR_H）避開，所以不要再加
+        for w in (win, win.centralWidget()):
+            if w is not None:
+                w.setAttribute(Qt.WA_ContentsMarginsRespectsSafeArea, False)
         nswin = objc.objc_object(c_void_p=int(win.winId())).window()
         nswin.setTitleVisibility_(NSWindowTitleHidden)  # 標題改顯示在自己的工具列
         content = nswin.contentView()
