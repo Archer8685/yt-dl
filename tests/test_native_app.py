@@ -618,3 +618,110 @@ def test_clipboard_watcher_finds_supported_link_in_background(app):
     w.check("https://www.google.com/")
     assert wait_until(lambda: found, 10_000)
     assert found == ["https://youtu.be/jNQXAC9IVRw"]
+
+
+# --------------------------------------------------------------------------- #
+#  免責聲明、關於
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def fresh_disclaimer(app, monkeypatch):
+    """模擬第一次開啟：沒有同意紀錄、不是 smoke test、沒有設 YTDL_ACCEPT_DISCLAIMER。"""
+    monkeypatch.delenv("YTDL_ACCEPT_DISCLAIMER", raising=False)
+    monkeypatch.setattr(sys, "argv", ["native_app.py"])
+    na.settings_store().remove(na.DISCLAIMER_KEY)
+    yield
+    na.settings_store().remove(na.DISCLAIMER_KEY)
+
+
+def press(text, seen=None):
+    """回傳 run(box)：記下對話框，按下指定文字的按鈕。"""
+    def run(box):
+        if seen is not None:
+            seen.append(box)
+        next(b for b in box.buttons() if b.text() == text).click()
+    return run
+
+
+def test_disclaimer_asked_on_first_run_then_remembered(fresh_disclaimer):
+    seen = []
+    assert na.disclaimer_needed()
+    assert na.confirm_disclaimer(None, press("我了解並同意", seen))
+    assert len(seen) == 1
+    assert na.DISCLAIMER_URL in seen[0].informativeText() and "有權" in seen[0].informativeText()
+    assert na.settings_store().value(na.DISCLAIMER_KEY) == na.DISCLAIMER_VERSION
+    # 同意後不再問
+    assert not na.disclaimer_needed()
+    assert na.confirm_disclaimer(None, press("我了解並同意", seen))
+    assert len(seen) == 1
+
+
+def test_disclaimer_asked_again_when_content_version_changes(fresh_disclaimer):
+    na.settings_store().setValue(na.DISCLAIMER_KEY, "0")  # 同意的是舊版聲明
+    assert na.disclaimer_needed()
+
+
+def test_leave_quits_through_shutdown_and_is_not_remembered(fresh_disclaimer):
+    left = []
+    assert not na.require_disclaimer(None, None, press("離開"), leave=lambda: left.append(True))
+    assert left == [True]
+    assert na.disclaimer_needed()  # 沒有同意：下次開啟還會再問
+
+
+def test_leave_default_runs_shutdown_then_exits(app, fresh_disclaimer, monkeypatch):
+    calls = []
+    monkeypatch.setattr(na, "shutdown", lambda a, w: calls.append(("shutdown", a, w)))
+    monkeypatch.setattr(na.os, "_exit", lambda code: calls.append(("exit", code)))
+    na.require_disclaimer(app, None, press("離開"))
+    assert calls == [("shutdown", app, None), ("exit", 0)]
+
+
+def test_escape_or_closing_dialog_counts_as_leave(fresh_disclaimer):
+    box, accept = na.disclaimer_box()
+    assert box.escapeButton().text() == "離開" and box.defaultButton() is accept
+
+
+def test_accept_continues_without_leaving(fresh_disclaimer):
+    left = []
+    assert na.require_disclaimer(None, None, press("我了解並同意"), leave=lambda: left.append(True))
+    assert left == []
+
+
+def test_disclaimer_never_blocks_smoke_test_or_automation(fresh_disclaimer, monkeypatch):
+    def fail(box):
+        raise AssertionError("自動化流程不能顯示免責聲明對話框")
+
+    monkeypatch.setattr(sys, "argv", ["native_app.py", "--smoke-test"])
+    assert not na.disclaimer_needed() and na.confirm_disclaimer(None, fail)
+    monkeypatch.setattr(sys, "argv", ["native_app.py"])
+    monkeypatch.setenv("YTDL_ACCEPT_DISCLAIMER", "1")
+    assert not na.disclaimer_needed() and na.confirm_disclaimer(None, fail)
+    assert na.settings_store().value(na.DISCLAIMER_KEY) is None  # 跳過不算使用者同意
+
+
+def test_main_asks_disclaimer_before_showing_window():
+    """視窗一顯示就會檢查剪貼簿並自動解析連結：免責聲明一定要在 win.show() / win.start() 之前。"""
+    import inspect
+    lines = [ln.strip() for ln in inspect.getsource(na.main).splitlines()]
+    assert lines.index("require_disclaimer(app, win)") < lines.index("win.show()") < lines.index("win.start()")
+
+
+def test_ui_screenshot_skips_disclaimer():
+    src = (Path(__file__).resolve().parent.parent / "tools" / "ui_screenshot.py").read_text(encoding="utf-8")
+    assert 'os.environ.setdefault("YTDL_ACCEPT_DISCLAIMER", "1")' in src
+
+
+def test_settings_about_shows_version_and_disclaimer_link(app, monkeypatch):
+    page = na.SettingsPage(FakeApi(), lambda *a, **k: None)
+    version = (Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
+    assert na.app_version() == version
+    assert page.app_version.text() == version
+    assert "有權" in page.disclaimer_text.text()
+    opened = []
+    monkeypatch.setattr(na.QDesktopServices, "openUrl", lambda u: opened.append(u.toString()))
+    page.disclaimer_link.click()
+    assert opened == [na.DISCLAIMER_URL]
+
+
+def test_app_version_falls_back_when_file_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(na, "BUNDLE", tmp_path)
+    assert na.app_version() == "開發版"

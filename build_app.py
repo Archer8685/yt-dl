@@ -168,6 +168,44 @@ def bundled_version_file() -> Path:
     return out
 
 
+def version_file() -> Path:
+    """App 的版本（「設定 → 關於」顯示）：用這次打包的版本號（YTDL_APP_VERSION 優先）。"""
+    out = BUILD / "VERSION"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(VERSION, encoding="utf-8")
+    return out
+
+
+def disclaimer_text(md: str) -> str:
+    """把 DISCLAIMER.md 轉成安裝精靈授權頁用的純文字（去掉 Markdown 符號，連結改成「文字（網址）」）。"""
+    lines = []
+    for line in md.splitlines():
+        s = line.strip()
+        if s.startswith(("<a ", "> [English")):
+            continue
+        if s == "---":
+            lines.append("")
+            continue
+        s = re.sub(r"^#+\s*", "", s)
+        s = re.sub(r"^>\s?", "", s)
+        s = re.sub(r"\[([^\]]+)\]\((#[^)]*)\)", r"\1", s)  # 頁內連結只留文字
+        s = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1（\2）", s)
+        s = s.replace("**", "").replace("`", "")
+        if s.startswith("- "):
+            s = "・" + s[2:]
+        lines.append(s)
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return text + "\n"
+
+
+def license_file() -> Path:
+    """Windows 安裝精靈的授權／聲明頁（要選「我同意」才能安裝）。Inno Setup 需要 UTF-8 BOM 才讀得懂中文。"""
+    out = BUILD / "DISCLAIMER.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(disclaimer_text((ROOT / "DISCLAIMER.md").read_text(encoding="utf-8")), encoding="utf-8-sig")
+    return out
+
+
 # 介面只用到 QtCore / QtGui / QtWidgets / QtNetwork（QtSvg 保留給圖示用）；其他 Qt 模組一律不打包
 QT_EXCLUDES = [f"PySide6.{m}" for m in (
     "QtWebEngineCore", "QtWebEngineWidgets", "QtWebEngineQuick", "QtWebChannel", "QtWebSockets", "QtWebView",
@@ -243,7 +281,8 @@ def pyinstaller():
         datas=[(str(ROOT / "index.html"), "."),  # 引擎的網頁版介面（瀏覽器開 http://127.0.0.1:8765）
                (str(ROOT / "assets" / "icon-128.png"), "assets"),
                (str(ROOT / "assets" / "chevron.png"), "assets"),  # Windows 彈出選單的箭頭
-               (str(bundled_version_file()), ".")],
+               (str(bundled_version_file()), "."),
+               (str(version_file()), ".")],  # App 版本（設定 → 關於）
         binaries=[(str(BIN / "*"), "bin")],  # FFmpeg / ffprobe / Deno
         tools_dir=str(BIN.resolve()).replace("\\", "/").lower() + "/",
         # 用不到卻很大的檔案：軟體 OpenGL（約 20 MB）、PDF 引擎（只有 qpdf 圖片外掛會用到）、
@@ -285,6 +324,8 @@ PrivilegesRequiredOverridesAllowed=dialog
 OutputDir={dist}
 OutputBaseFilename={name}-Setup-Windows
 SetupIconFile={icon}
+; 免責與合法使用聲明：安裝前要選「我同意」
+LicenseFile={license}
 UninstallDisplayIcon={{app}}\{{#AppExe}}
 UninstallDisplayName={{#AppName}}
 Compression=lzma2/ultra64
@@ -326,7 +367,8 @@ def windows_installer() -> Path | None:
     iss = BUILD / "installer.iss"
     # Inno Setup 需要 UTF-8 BOM 才會把中文當 UTF-8 讀
     iss.write_text(INNO_SCRIPT.format(display=DISPLAY, name=NAME, version=VERSION, dist=DIST,
-                                      icon=ROOT / "assets" / "icon.ico", lang=lang, src=DIST / NAME),
+                                      icon=ROOT / "assets" / "icon.ico", lang=lang, src=DIST / NAME,
+                                      license=license_file()),
                    encoding="utf-8-sig")
     subprocess.run([iscc, "/Q", str(iss)], check=True)
     return DIST / f"{NAME}-Setup-Windows.exe"

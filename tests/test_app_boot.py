@@ -177,3 +177,24 @@ def test_start_engine_attaches_when_port_taken(monkeypatch):
     url, busy = app_boot.start_engine(fake)
     assert url == "http://127.0.0.1:8765" and busy() is False
 
+
+def test_installer_requires_accepting_disclaimer(tmp_path, monkeypatch):
+    """Windows 安裝精靈有授權／聲明頁，內容是 DISCLAIMER.md 的純文字版。"""
+    import build_app
+    assert "LicenseFile={license}" in build_app.INNO_SCRIPT
+    monkeypatch.setattr(build_app, "BUILD", tmp_path)
+    raw = build_app.license_file().read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")  # Inno Setup 要 UTF-8 BOM 才讀得懂中文
+    text = raw.decode("utf-8-sig")
+    assert text.startswith("免責與合法使用聲明")
+    assert "https://github.com/Archer8685/yt-dl/issues" in text and "Disclaimer (English)" in text
+    for junk in ("**", "](", "<a ", "\n#", "English version below"):
+        assert junk not in text
+
+
+def test_bundled_app_version_follows_build_version(tmp_path, monkeypatch):
+    import build_app
+    monkeypatch.setattr(build_app, "BUILD", tmp_path)
+    monkeypatch.setattr(build_app, "VERSION", "9.9.9")
+    assert build_app.version_file().read_text(encoding="utf-8") == "9.9.9"
+

@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("YTDL_ACCEPT_DISCLAIMER", "1")  # 自動截圖不能被第一次開啟的免責聲明對話框卡住
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QPixmap

@@ -612,6 +612,70 @@ def settings_store() -> QSettings:
     return QSettings(SETTINGS_ORG, SETTINGS_APP)
 
 
+# --------------------------------------------------------------------------- #
+#  免責聲明與版本
+# --------------------------------------------------------------------------- #
+DISCLAIMER_URL = "https://github.com/Archer8685/yt-dl/blob/main/DISCLAIMER.md"
+# 免責聲明內容有實質變更時把這個數字加一：已同意舊版的使用者下次開啟會再看到一次
+DISCLAIMER_VERSION = "1"
+DISCLAIMER_KEY = "legal/accepted_version"
+DISCLAIMER_SHORT = ("YT 下載器只是下載工具，不提供、不託管任何影音內容，與 YouTube／Google 無任何關聯。\n"
+                    "請只下載你有權使用的內容，並遵守著作權法與各平台服務條款；不得用於侵權、散布盜版，"
+                    "或規避付費、DRM 等保護措施。使用者須自行承擔使用責任；本軟體以「現狀」提供，不提供任何保證。")
+
+
+def app_version() -> str:
+    """App 的版本：開發時讀專案的 VERSION，打包版讀 build_app.py 放進去的 VERSION。"""
+    try:
+        return (BUNDLE / "VERSION").read_text(encoding="utf-8").strip() or "開發版"
+    except OSError:
+        return "開發版"
+
+
+def disclaimer_needed() -> bool:
+    """第一次開啟（或聲明內容更新後）要先同意免責聲明。
+
+    自動化流程一律跳過，不能被對話框卡住：--smoke-test（CI）、環境變數 YTDL_ACCEPT_DISCLAIMER=1（截圖、測試）。
+    """
+    import app_boot
+    if app_boot.smoke_test_requested() or os.environ.get("YTDL_ACCEPT_DISCLAIMER") == "1":
+        return False
+    return str(settings_store().value(DISCLAIMER_KEY, "") or "") != DISCLAIMER_VERSION
+
+
+def disclaimer_box(parent: QWidget | None = None) -> tuple[QMessageBox, QPushButton]:
+    """第一次開啟時的免責聲明對話框；回傳 (對話框, 「我了解並同意」按鈕)。"""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Information)
+    box.setWindowTitle(f"{TITLE} — 使用聲明")
+    box.setText("使用前請閱讀")
+    box.setTextFormat(Qt.RichText)
+    body = DISCLAIMER_SHORT.replace("\n", "<br><br>")
+    # informative 標籤的連結 Qt 預設就可以點、用預設瀏覽器打開（openExternalLinks）
+    box.setInformativeText(f"{body}<br><br><a href=\"{DISCLAIMER_URL}\">查看完整免責聲明</a>")
+    accept = box.addButton("我了解並同意", QMessageBox.AcceptRole)
+    leave = box.addButton("離開", QMessageBox.RejectRole)
+    box.setDefaultButton(accept)
+    box.setEscapeButton(leave)  # Esc 或關閉視窗都當成「離開」
+    return box, accept
+
+
+def confirm_disclaimer(parent: QWidget | None = None, run=None) -> bool:
+    """需要時顯示免責聲明；同意（或不需要問）回傳 True 並記下同意的版本，按「離開」回傳 False。
+
+    run(box) 負責顯示對話框（預設 box.exec()）；測試用它模擬按下按鈕。
+    """
+    if not disclaimer_needed():
+        return True
+    box, accept = disclaimer_box(parent)
+    (run or (lambda b: b.exec()))(box)
+    ok = box.clickedButton() is accept
+    if ok:
+        settings_store().setValue(DISCLAIMER_KEY, DISCLAIMER_VERSION)
+    box.deleteLater()
+    return ok
+
+
 # 下載預設值：每次開啟 App 的「新增下載」都從這組選項開始（在「設定 → 下載預設值」修改）
 DOWNLOAD_DEFAULTS = {"mode": "av", "quality": None, "container": "mp4", "acodec": "mp3", "aquality": "0",
                      "as_playlist": False}
@@ -1333,6 +1397,29 @@ class SettingsPage(QWidget):
         lay.addWidget(card2)
         note = label("yt-dlp 會在背景自動更新，YouTube 改版時通常不需要手動處理。", "subtitle", wrap=True)
         lay.addWidget(note)
+
+        # 關於：版本與免責聲明
+        lay.addSpacing(8)
+        lay.addWidget(label("關於", "sectionHeader"))
+        about = Card()
+        self.app_version = label(app_version(), "subtitle", plain=True)
+        about.add(form_row(TITLE, self.app_version))
+        legal = QWidget()
+        ll = QVBoxLayout(legal)
+        ll.setContentsMargins(14, 10, 14, 10)
+        ll.setSpacing(4)
+        self.disclaimer_text = label(DISCLAIMER_SHORT.replace("\n", ""), "hint", wrap=True, plain=True)
+        ll.addWidget(self.disclaimer_text)
+        self.disclaimer_link = QPushButton("查看完整免責聲明")
+        self.disclaimer_link.setObjectName("link")
+        self.disclaimer_link.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DISCLAIMER_URL)))
+        lrow = QHBoxLayout()
+        lrow.setContentsMargins(0, 4, 0, 0)
+        lrow.addWidget(self.disclaimer_link)
+        lrow.addStretch()
+        ll.addLayout(lrow)
+        about.add(legal)
+        lay.addWidget(about)
         lay.addStretch()
 
     @staticmethod
@@ -1955,6 +2042,9 @@ def main():
     app.styleHints().colorSchemeChanged.connect(lambda *_: apply_theme(app, win, chevron))
     win.settings.appearance_changed.connect(lambda: apply_appearance(app, win, chevron))
     apply_appearance(app, win, chevron)  # 套用上次選的主題與文字大小
+    # 第一次開啟：先同意免責聲明，按「離開」就結束。要在 win.show() 之前：
+    # 視窗一顯示就會檢查剪貼簿、自動貼上並解析連結，不能在使用者同意前就送出請求
+    require_disclaimer(app, win)
     win.show()
     win.start()
     app_boot.install_smoke_test(app)  # --smoke-test：CI 確認視窗能開啟後自動結束
@@ -1962,6 +2052,16 @@ def main():
     shutdown(app, win)
     restarter.launch(server.ROOT)  # 更新 yt-dlp 後要求的重新啟動（新程序會等這裡釋放連接埠）
     os._exit(code)  # 結束背景的 Flask 與下載執行緒
+
+
+def require_disclaimer(app: QApplication, win: QMainWindow, run=None, leave=None) -> bool:
+    """顯示免責聲明（需要時）；按「離開」走正常的關閉流程（shutdown 釋放 Qt）後結束程序。
+    在主視窗顯示之前呼叫，所以對話框不掛在 win 底下（掛在隱藏的視窗下 Windows 工作列不會出現它，
+    容易被其他視窗蓋住找不到）；深淺色主題由 QApplication 的樣式表與調色盤套用。"""
+    if confirm_disclaimer(None, run):
+        return True
+    (leave or (lambda: (shutdown(app, win), os._exit(0))))()
+    return False
 
 
 def shutdown(app: QApplication, win: QMainWindow):

@@ -1,144 +1,116 @@
 # YT Downloader
 
-一頁式影片下載器，底層使用 [yt-dlp](https://github.com/yt-dlp/yt-dlp) + FFmpeg。支援 YouTube 與 yt-dlp 支援的 1000+ 網站。
+用 [yt-dlp](https://github.com/yt-dlp/yt-dlp) + FFmpeg 下載 YouTube 與 1000+ 網站影片的桌面 App（PySide6 原生介面 + Flask 下載引擎，Windows／macOS）。
 
-**線上介面：** https://archer8685.github.io/yt-dl/ （需搭配本機引擎，見下方）
+> [!IMPORTANT]
+> 本軟體只是工具，不提供任何影音內容，與 YouTube／Google 無關。請只下載你有權使用的內容；使用、修改或散布本專案即表示同意 [免責聲明（DISCLAIMER.md）](DISCLAIMER.md)。
 
-## 功能
+**一般使用者請看 [使用說明（USER_GUIDE.md）](USER_GUIDE.md)**；安裝檔在 [Releases](https://github.com/Archer8685/yt-dl/releases/latest)。
 
-- **影片＋音訊 / 僅影片 / 僅音訊 / 僅字幕 / 僅縮圖** 五種模式
-- **畫質**：最佳、8K 到 144p；編碼偏好 AV1 / VP9 / H.264 / H.265；FPS 上限；HDR / SDR
-- **容器**：MP4、MKV、WebM、MOV、AVI、FLV（重新封裝或重新編碼）
-- **多音軌**：可複選多種語言音軌，一次合併進同一個影片檔（例如原音＋中文配音）
-- **音訊轉檔**：MP3、M4A、AAC、Opus、OGG、FLAC、WAV、ALAC，320k–64k 或 VBR
-- **字幕**：上傳者字幕、自動字幕、自動翻譯字幕，可複選；SRT / VTT / ASS / LRC；嵌入或另存
-- **手動格式表**：列出所有串流，可自選影片串流＋多條音訊串流
-- **YouTube Premium**：上傳 Premium 帳號的 cookies.txt 後，可下載 Premium 專屬的 1080p 高位元率串流
-- **剪輯**：只下載指定時間範圍（可多段）、依章節切割、點章節快速加入
-- **SponsorBlock**：移除或標記贊助、片頭、片尾等片段
-- **中繼資料**：嵌入標題、章節、封面縮圖；另存說明、info.json、留言
-- **播放清單**：勾選要下載的項目或輸入範圍
-- **網路**：cookies.txt / 瀏覽器 Cookie、代理伺服器、限速、地區、並行分段、重試次數
-- 下載佇列：進度、速度、剩餘時間、取消、紀錄、多檔打包 ZIP
-- **yt-dlp 自動更新**：引擎啟動時與每 6 小時檢查 PyPI，有新版自動更新並重啟
+## 專案架構
 
-## 架構
+介面與引擎跑在同一個程序：`server.py` 在背景執行緒提供本機 HTTP API（預設 `127.0.0.1:8765`），Qt 介面透過 API 操作。
 
-GitHub Pages 只能放靜態網頁，**無法執行 yt-dlp**，所以分成兩部分：
+| 檔案 | 負責 |
+| --- | --- |
+| `native_app.py` | App 進入點與主視窗：側邊欄、「新增下載」、「下載佇列」、「設定」頁；樣式表與主題、剪貼簿自動貼上、免責聲明對話框、macOS 毛玻璃側邊欄 |
+| `native_options.py` | 「進階選項」面板（編碼、音軌、字幕、剪輯、SponsorBlock、中繼資料、Cookie／代理／限速）與共用元件（`Switch` 等） |
+| `native_playlist.py` | 播放清單選擇：勾選、搜尋、範圍、縮圖延遲載入 |
+| `app_boot.py` | 啟動流程：命令列參數、匯入引擎（含自動更新的 yt-dlp）、背景啟動引擎、紀錄檔、`--smoke-test` |
+| `server.py` | 下載引擎（Flask + yt-dlp）：解析、佇列、續傳、磁碟空間檢查、cookies、Premium 檢查；也提供網頁版介面 `index.html` |
+| `ytdlp_update.py` | yt-dlp 自動更新：從 PyPI 下載新版到使用者資料夾，驗證能載入後才啟用，失敗退回內建版 |
+| `build_app.py` | 打包：下載 FFmpeg／ffprobe／Deno → 產生 PyInstaller spec → Inno Setup 安裝精靈或 dmg |
+| `index.html` | 網頁版介面（引擎直接提供，也部署到 GitHub Pages 連本機引擎） |
+| `tools/release_notes.py` | 由 `CHANGELOG.md` 該版段落產生 Release 說明（＋安裝說明＋免責聲明） |
+| `tools/ui_screenshot.py` | 以範例資料開啟 App 並截三個頁面（淺色／深色） |
+| `tests/` | pytest：引擎 API、介面元件（offscreen Qt）、啟動流程、Release 說明 |
 
-| 部分 | 位置 | 作用 |
-| --- | --- | --- |
-| 介面 `index.html` | GitHub Pages，或引擎本身 | 操作畫面 |
-| 引擎 `server.py` | 你的電腦 `127.0.0.1:8765` | 執行 yt-dlp / FFmpeg，存放下載的檔案 |
+其他：`VERSION`（App 版本，發布觸發點）、`CHANGELOG.md`、`DISCLAIMER.md`、`USER_GUIDE.md`、`assets/`（圖示）、`start.bat`／`start.sh`（只跑引擎＋網頁版）。
 
-## 安裝與啟動
+## 開發環境
 
-### 桌面 App（建議）
-
-到 [Releases](https://github.com/Archer8685/yt-dl/releases/latest) 下載。App 已內建 yt-dlp、FFmpeg、Deno，不用裝 Python。介面是原生視窗（Qt），外觀參照 macOS：macOS 上使用系統原生元件與毛玻璃側邊欄，並跟著系統切換淺色／深色。
-
-| 系統 | 檔案 | 安裝方式 |
-| --- | --- | --- |
-| Windows 10 / 11 | `YT-Downloader-Setup-Windows.exe` | 執行安裝精靈，之後從「開始」功能表或桌面開啟「YT 下載器」。出現「Windows 已保護您的電腦」時，按「其他資訊」→「仍要執行」。解除安裝在「設定 → 應用程式」 |
-| macOS（Apple 晶片） | `YT-Downloader-macOS-AppleSilicon.dmg` | 打開後把「YT 下載器」拖進「應用程式」。第一次被擋下時，到「系統設定 → 隱私權與安全性」按「仍要打開」，或執行一次 `xattr -dr com.apple.quarantine "/Applications/YT 下載器.app"` |
-
-- 檔案預設存在「下載」資料夾裡的 `YT-Downloads`。
-- 設定、cookies、執行紀錄 `engine.log` 存在 `%LOCALAPPDATA%\YT-Downloader`（macOS：`~/Library/Application Support/YT-Downloader`）。
-- 下載進行中關閉視窗時會先詢問；關掉後，下次開啟按「繼續下載」即可接著下載。
-- 下載佇列裡有檔案的工作都有「在檔案總管／Finder 中顯示」。
-- 「刪除」會把工作連同已下載的檔案、可續傳的暫存一起永久刪除（不會放到資源回收筒），按下後會先詢問。
-- 「設定」可以調整：
-  - **外觀**：跟隨系統／淺色／深色，文字大小 小／中／大。
-  - **下載預設值**：每次開啟時的下載模式、畫質、影片／音訊格式、音質、是否下載整個播放清單；「恢復所有預設值」一鍵還原。進階選項（字幕、剪輯等）會記住上次的設定。
-  - **YouTube Premium**：用目前的 Cookie 檢查帳號是否登入、是否有 Premium（偵測到時自動開啟 Premium 高位元率）；Cookie 過期時按「更新 cookies.txt…」上傳新的並重新檢查。
-- 用 `YT-Downloader --server` 啟動時只執行引擎、不開視窗，可以改用瀏覽器開 http://127.0.0.1:8765。
-
-**yt-dlp 自動更新**：YouTube 常改版，App 會在啟動時與每 6 小時檢查 PyPI，有新版就在背景下載，放在資料夾裡的 `ytdlp/`。下次開啟 App 就會使用新版；也可以按右上角「重新啟動以套用」立即套用。
-
-- 下載的 wheel 會用 PyPI 提供的 sha256 校驗，並先在另一個程序實際載入一次，確認能用才切換。
-- 新版載入失敗時，App 會自動退回內建版本，不會打不開。
-- 設定 `YTDL_AUTO_UPDATE=0` 可以關閉自動更新。
-
-App 本身（介面、FFmpeg、Deno）的更新，請到 Releases 下載新版安裝；設定與下載紀錄會保留。
-
-### 用 Python 原始碼執行（Linux、Intel Mac、開發用）
-
-需要：Python 3.10+、[FFmpeg](https://ffmpeg.org/download.html)、[Node.js](https://nodejs.org) 或 [Deno](https://deno.com)（YouTube 解 JS challenge 用）。
+需要 Python 3.10+（CI 用 3.12）；從原始碼執行另需 PATH 上有 FFmpeg，以及 Deno 或 Node.js（yt-dlp 解 YouTube 簽章用）。
 
 ```bash
 git clone https://github.com/Archer8685/yt-dl.git
 cd yt-dl
-start.bat      # Windows
-./start.sh     # macOS / Linux
+python -m venv .venv
+.venv/Scripts/activate          # macOS／Linux：source .venv/bin/activate
+pip install -r requirements-app.txt pytest ruff
+python native_app.py            # 原生 App
 ```
 
-啟動後打開 http://127.0.0.1:8765，或打開 GitHub Pages 版介面（會自動連到本機引擎）。
+- `requirements.txt`：引擎（yt-dlp、Flask）；`requirements-app.txt`：再加 PySide6-Essentials、PyInstaller、macOS 的 PyObjC。
+- `python native_app.py --server`：只跑引擎不開視窗，瀏覽器開 http://127.0.0.1:8765 用網頁版。
+- `python native_app.py --smoke-test`：視窗顯示幾秒後自動結束（可搭配 `QT_QPA_PLATFORM=offscreen`）。
+- `start.bat`／`start.sh`：只跑 `server.py`，每次啟動會 `pip install -U yt-dlp`。
+- 開發時「設定 → 關於」顯示專案根目錄的 `VERSION`。
 
-### 自己打包
+## 測試
 
 ```bash
-pip install -r requirements-app.txt
-python build_app.py      # Windows：dist/YT-Downloader-Setup-Windows.exe（需要 Inno Setup 6）；macOS：dist/YT-Downloader-macOS-*.dmg
-python native_app.py     # 開發時直接開 App 視窗（PySide6 原生介面）
+python -m pytest -q
+ruff check .
+python tools/ui_screenshot.py shots light   # 截圖到 shots/，第二個參數 light 或 dark
 ```
 
-- App 介面是 PySide6（Qt）原生元件，`server.py` 引擎在同一個程序的背景執行；打包時排除了用不到的 Qt 模組（WebEngine、QML、Multimedia 等）。
-- `build_app.py` 會下載對應平台的 FFmpeg / ffprobe / Deno 一起打包；`index.html` 也會打包，App 執行時可以用瀏覽器開 http://127.0.0.1:8765 使用網頁版。
-- App 的命令列參數（`app_boot.py`）：`--server` 只跑引擎不開視窗、`--smoke-test` 開視窗幾秒後自動結束（搭配 `QT_QPA_PLATFORM=offscreen` 可在沒有螢幕的環境測試）。
-- App 圖示由 `assets/make_icon.py` 產生（需要 Pillow）。
-- 發布新版：修改 `VERSION`（例如 `1.0.1`）並 push 到 `main`。`.github/workflows/release.yml` 會在 Windows 與 macOS 上打包，實際安裝並做啟動測試後，發布 `v<版本>` 到 Releases。也可以在 Actions 頁面手動執行；同一版只會發布一次。
+- 介面測試用 offscreen Qt（各測試檔設定 `QT_QPA_PLATFORM=offscreen`；`tests/conftest.py` 負責結束時依序釋放 Qt），不需要螢幕。
+- `tests/test_release_notes.py` 會檢查目前的 `VERSION` 在 `CHANGELOG.md` 有對應段落：改版號前先寫 CHANGELOG，否則測試失敗。
+- 自動化執行 App 時設 `YTDL_ACCEPT_DISCLAIMER=1`，避免被第一次開啟的使用聲明擋住（`--smoke-test` 會自動跳過）。
 
-## yt-dlp 自動更新
+## 打包
 
-YouTube 經常改版，yt-dlp 也跟著頻繁更新。引擎有三層自動更新：
+```bash
+python build_app.py
+```
 
-1. `start.bat` / `start.sh` 每次啟動都會執行 `pip install -U`
-2. `server.py` 啟動時查 PyPI，有新版就更新並自動重啟
-3. 執行期間每 6 小時再檢查一次（沒有下載工作時才會更新重啟）
+1. 下載當前平台的 FFmpeg／ffprobe／Deno 到 `build/vendor/bin` 並實際執行確認（GitHub 下載失敗會重試並改走 GitHub API；有 `GITHUB_TOKEN` 會帶上）。
+2. 產生 `build/YT-Downloader.spec` 並執行 PyInstaller（onedir、無主控台）：
+   - `datas`：`index.html`、`assets/icon-128.png`、`assets/chevron.png`、`bundled-ytdlp.txt`（內建 yt-dlp 版本，自動更新比對用）、`VERSION`（「關於」顯示的版本）
+   - `binaries`：`bin/` 下的 FFmpeg／ffprobe／Deno
+   - 排除用不到的 Qt 模組與外掛（WebEngine、QML／Quick、Multimedia、軟體 OpenGL…），只留 zh_TW 翻譯
+   - macOS 產生 `.app`（Info.plist 含顯示名稱、版本、深色模式、區域網路說明）並 `hiddenimports` PyObjC
+3. 產出：
+   - Windows：Inno Setup 6（`ISCC.exe`）→ `dist/YT-Downloader-Setup-Windows.exe`。腳本 `build/installer.iss` 以 UTF-8 BOM 寫入；`LicenseFile` 是由 `DISCLAIMER.md` 轉成的 `build/DISCLAIMER.txt`（UTF-8 BOM），安裝前要選「我同意」。預設只裝給目前使用者（不需管理員）。沒有 Inno Setup 時只產出 `dist/YT-Downloader/`。
+   - macOS：`dist/YT-Downloader-macOS-AppleSilicon.dmg`（Intel 為 `-Intel`）。
+- 版本號取自 `VERSION`，可用 `YTDL_APP_VERSION` 覆寫。App 未做程式碼簽章／公證。
 
-介面右上角也會在有新版時出現「更新至 x.x.x」按鈕。
+## CI（`.github/workflows/`）
 
-| 環境變數 | 說明 |
+| Workflow | 觸發 | 內容 |
+| --- | --- | --- |
+| `release.yml` | push 到 `main` 且改了 `VERSION`；手動 | 該版已發布就略過；先用 `tools/release_notes.py` 確認 CHANGELOG 有該版段落 → Windows／macOS 各自 pytest、打包、實際安裝（靜默安裝／掛載 dmg）、引擎啟動測試、yt-dlp 自動更新載入測試（含壞掉的版本要快速失敗）、GUI 煙霧測試 → 發布 `v<版本>` Release |
+| `ui-screenshots.yml` | 改了 `native_*.py`、`app_boot.py`、`assets/**`、`tools/ui_screenshot.py`；手動 | macOS／Windows 以淺色與深色各截一次三個頁面，放在該次執行的 Artifacts |
+| `pages.yml` | 改了 `index.html` | 把網頁版介面部署到 GitHub Pages |
+
+## 發布流程
+
+1. 在 `CHANGELOG.md` 最上方寫 `## <版本> — YYYY-MM-DD` 段落（未發布的改動先放「未發布」底下）。
+2. 修改 `VERSION`，跑 `pytest`。
+3. Commit 並 push 到 `main` → `release.yml` 打包、測試、發布。Release 說明 = 該版段落 + 安裝說明（連到 `USER_GUIDE.md`）+ 免責聲明。
+
+同一版只會發布一次；要重發請先刪掉該 Release／tag，或改版號。
+
+## 環境變數
+
+| 變數 | 說明 |
 | --- | --- |
-| `YTDL_AUTO_UPDATE=0` | 關閉自動更新 |
-| `YTDL_CHANNEL=nightly` | 使用 nightly（pre-release）版本，YouTube 壞掉時修正最快 |
-| `YTDL_PORT` / `YTDL_HOST` | 監聽位址（預設 `127.0.0.1:8765`） |
-| `YTDL_ALLOWED_ORIGINS` | 允許跨來源呼叫的網站，預設 `https://archer8685.github.io` |
+| `YTDL_PORT`／`YTDL_HOST` | 引擎監聽位址（預設 `127.0.0.1:8765`） |
+| `YTDL_DOWNLOAD_DIR` | 固定下載位置（設定後介面上不能改） |
 | `YTDL_PARALLEL` | 同時下載數（預設 3） |
-| `YTDL_DOWNLOAD_DIR` | 固定下載位置（設定後網頁上就不能改） |
 | `YTDL_MIN_FREE_GB` | 剩餘空間低於此值就停止下載（預設 2） |
+| `YTDL_AUTO_UPDATE=0` | 關閉 yt-dlp 自動更新 |
+| `YTDL_CHANNEL=nightly` | 自動更新改用 yt-dlp nightly |
+| `YTDL_ALLOWED_ORIGINS` | 允許跨來源呼叫引擎的網站，逗號分隔（預設 `https://archer8685.github.io`） |
+| `YTDL_ACCEPT_DISCLAIMER=1` | 跳過第一次開啟的使用聲明（自動化、截圖） |
+| `YTDL_APP_VERSION` | 打包時覆寫 App 版本號（`build_app.py`） |
+| `GITHUB_TOKEN` | 打包時下載工具走 GitHub API 用，避免匿名請求被限流 |
 
-## 儲存位置與磁碟空間
+資料存放位置：
 
-下載佇列上方會顯示目前的儲存位置和剩餘空間，按「變更」可以一鍵切到其他磁碟，或輸入完整路徑（設定存在 `settings.json`）。
+- 引擎資料（`settings.json` 的下載位置、`cookies.txt`、自動更新的 yt-dlp、`engine.log`）：打包版在 Windows `%LOCALAPPDATA%\YT-Downloader`、macOS `~/Library/Application Support/YT-Downloader`；從原始碼執行時在專案根目錄（預設下載到 `downloads/`，已在 `.gitignore`）。
+- 介面偏好（外觀、下載預設值、進階選項、自動貼上、免責聲明同意紀錄）：`QSettings("YTDownloader", "NativeApp")`，即 Windows 登錄 `HKCU\Software\YTDownloader\NativeApp`、macOS `~/Library/Preferences` 的 plist。
 
-下載前和下載中都會檢查空間：如果檔案預估大小放不下，或剩餘空間低於 2 GB，會立即停止並保留已完成的檔案，不會把系統碟塞滿。下載整季 4K 這類大量內容前，建議先換到空間大的磁碟。
+## 授權與免責
 
-## 大檔案、中斷與續傳
-
-- 下載途中斷線或串流網址過期（長時間下載常見的 HTTP 403）時，引擎會自動重新取得網址、從中斷處續傳，最多 3 次。
-- 失敗的工作會保留已下載的暫存資料，按「繼續下載」就能接著下載；「清除已完成」不會刪掉這些工作。
-- 每個工作都存有 `job.json`，引擎被關掉（關視窗、睡眠、重開機）後重新執行 `start.bat`，中斷的工作會顯示「已中斷」與「繼續下載」。
-- 網頁和引擎斷線時，下載佇列上方會出現提示，不會再停在舊的進度上。
-- 合併影音軌、寫入中繼資料時也會顯示進度、速度與剩餘時間。FFmpeg 每個步驟都要把整個檔案寫一遍，100 GB 的檔案在同一顆硬碟上每步約需半小時，請耐心等候。
-- 為了少寫幾遍大檔案，MP4 不加 faststart（索引放在檔尾）。本機播放沒有差別；如果要放到網站上邊下載邊播放，可以用 `ffmpeg -i in.mp4 -c copy -movflags +faststart out.mp4` 轉一次。
-- 長時間下載時，請讓 `start.bat` 的視窗保持開著，並關掉電腦的自動睡眠。
-
-## YouTube Premium / 會員 / 年齡限制
-
-1. 在瀏覽器登入你的 YouTube（Premium）帳號
-2. 用擴充功能（例如「Get cookies.txt LOCALLY」）匯出 `youtube.com` 的 cookies.txt
-3. 在介面「網路」區塊上傳，勾選「使用 cookies.txt」，然後重新解析網址
-4. 格式表中標有 **Premium** 的就是 Premium 專屬串流；開啟「YouTube Premium 高位元率」會優先選它
-
-cookies.txt 只存在你電腦上的專案資料夾（已列入 `.gitignore`），不會上傳到任何地方。也可以改用「從瀏覽器讀取 Cookie」。
-
-## GitHub Pages 設定
-
-Repo → Settings → Pages → Source 選 **GitHub Actions**。之後每次 push `index.html` 會由 `.github/workflows/pages.yml` 自動部署。
-
-> Chrome 從 https 網站連到本機時，可能跳出「允許存取區域網路裝置」的提示，請選允許。Safari 不支援這種連線，請改用 Chrome / Edge / Firefox，或直接開 http://127.0.0.1:8765。
-
-## 注意
-
-請只下載你有權使用的內容，並遵守各平台服務條款與著作權法。
+本專案未附開源授權檔；使用前請先閱讀 [DISCLAIMER.md](DISCLAIMER.md)。第三方元件依各自授權：[yt-dlp](https://github.com/yt-dlp/yt-dlp)（Unlicense）、[FFmpeg](https://ffmpeg.org)（打包版為 GPL 組建）、[Deno](https://deno.com)（MIT）、[Qt for Python](https://doc.qt.io/qtforpython-6/)（LGPL）。

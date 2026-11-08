@@ -42,6 +42,22 @@ def test_notes_have_changes_then_install_guide():
     assert "YT-Downloader-Setup-Windows.exe" in notes and "YT-Downloader-macOS-AppleSilicon.dmg" in notes
 
 
+def test_install_guide_links_to_user_guide():
+    notes = rn.release_notes("1.2.0", SAMPLE)
+    install = notes[notes.index("## 下載與安裝"):notes.index("## 免責聲明")]
+    assert "https://github.com/Archer8685/yt-dl/blob/main/USER_GUIDE.md" in install
+    assert (ROOT / "USER_GUIDE.md").is_file()  # 連結指向的檔案要真的存在
+
+
+def test_notes_end_with_disclaimer_link():
+    notes = rn.release_notes("1.2.0", SAMPLE)
+    assert notes.index("## 下載與安裝") < notes.index("## 免責聲明")
+    tail = notes[notes.index("## 免責聲明"):]
+    assert "https://github.com/Archer8685/yt-dl/blob/main/DISCLAIMER.md" in tail
+    assert "有權" in tail and "YouTube" in tail
+    assert (ROOT / "DISCLAIMER.md").is_file()  # 連結指向的檔案要真的存在
+
+
 def test_current_version_has_release_notes():
     """改 VERSION 發布前，CHANGELOG.md 一定要先寫好這一版的說明（否則發布流程會停下來）。"""
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
