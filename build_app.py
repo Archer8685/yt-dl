@@ -11,8 +11,10 @@ App 版本號取自 VERSION 檔（可用環境變數 YTDL_APP_VERSION 覆寫）�
 """
 from __future__ import annotations
 
+import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -40,25 +42,60 @@ INNO_ZH = "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languag
 ISCC_PATHS = [r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe", r"C:\Program Files\Inno Setup 6\ISCC.exe"]
 
 
+GITHUB_RELEASE_URL = re.compile(
+    r"https://github\.com/([^/]+)/([^/]+)/releases/(?:latest/download|download/([^/]+))/([^/?#]+)$")
+
+
+def _fetch(url: str, out: Path, headers: dict[str, str] | None = None):
+    headers = {"User-Agent": "yt-dl-build", **(headers or {})}
+    # 優先用系統 curl：Windows / macOS 內建，且使用系統憑證（公司網路的 SSL 檢查也能通過）
+    if shutil.which("curl"):
+        cmd = ["curl", "-fsSL", "--retry", "3", "-o", str(out), url]
+        for k, v in headers.items():
+            cmd[1:1] = ["-H", f"{k}: {v}"]
+        subprocess.run(cmd, check=True)
+    else:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=300) as r, out.open("wb") as f:
+            shutil.copyfileobj(r, f)
+
+
+def _github_api_asset(url: str, tmp_json: Path) -> str | None:
+    """GitHub Releases 的下載網址 → 同一個檔案的 API 下載網址。
+
+    github.com/.../releases/download/ 偶爾會一直回 504，API 的下載通常還是正常的。
+    """
+    m = GITHUB_RELEASE_URL.match(url)
+    if not m:
+        return None
+    owner, repo, tag, name = m.groups()
+    api = f"https://api.github.com/repos/{owner}/{repo}/releases/" + (f"tags/{tag}" if tag else "latest")
+    _fetch(api, tmp_json, {"Accept": "application/vnd.github+json"})
+    assets = json.loads(tmp_json.read_text(encoding="utf-8")).get("assets") or []
+    tmp_json.unlink()
+    asset = next((a for a in assets if a.get("name") == name), None)
+    return asset and asset["url"]
+
+
 def download(url: str, dest: Path) -> Path:
     if dest.exists():
         return dest
     print(f"下載 {url}", flush=True)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".tmp")
-    # GitHub 的下載偶爾會暫時回 504 或連線中斷：多試幾次、每次等久一點
+    # GitHub 的下載偶爾會暫時回 504 或連線中斷：多試幾次、每次等久一點；
+    # 從第二次起改走 GitHub API 下載同一個檔案
     attempts = 5
     for i in range(1, attempts + 1):
         try:
-            # 優先用系統 curl：Windows / macOS 內建，且使用系統憑證（公司網路的 SSL 檢查也能通過）
-            if shutil.which("curl"):
-                subprocess.run(["curl", "-fL", "--retry", "3", "-o", str(tmp), url], check=True)
+            api_url = _github_api_asset(url, dest.with_suffix(".json")) if i > 1 else None
+            if api_url:
+                print(f"download via GitHub API: {api_url}", flush=True)
+                _fetch(api_url, tmp, {"Accept": "application/octet-stream"})
             else:
-                req = urllib.request.Request(url, headers={"User-Agent": "yt-dl-build"})
-                with urllib.request.urlopen(req, timeout=300) as r, tmp.open("wb") as f:
-                    shutil.copyfileobj(r, f)
+                _fetch(url, tmp)
             break
-        except (subprocess.CalledProcessError, OSError) as e:
+        except (subprocess.CalledProcessError, OSError, ValueError) as e:
             if i == attempts:
                 raise
             wait = 15 * i
