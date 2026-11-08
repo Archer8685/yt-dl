@@ -73,7 +73,28 @@ def main():
         win.download.thumb.setPixmap(na.rounded(QPixmap(str(ROOT / "assets" / "icon.png")), 192, 108, 8))
         step(0)
 
-    QTimer.singleShot(2000, fill)
+    # 先確認介面真的連得到引擎（設定頁拿到下載資料夾）再截圖，並把結果印在 CI 紀錄裡：
+    # 截到的空白畫面才分得出是「還沒載入」還是「連不上」
+    import time
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url + "/api/settings", timeout=5) as r:
+            print(f"urllib /api/settings: HTTP {r.status}", flush=True)
+    except OSError as e:
+        print(f"urllib /api/settings failed: {e}", flush=True)
+    t0 = time.monotonic()
+    result = {}
+    win.api.get("/api/settings", lambda s: result.setdefault("ok", s.get("download_dir")),
+                lambda m: result.setdefault("err", m))
+
+    def wait_engine():
+        if result or time.monotonic() - t0 > 20:
+            print(f"Qt /api/settings after {time.monotonic() - t0:.1f}s: {result or 'no reply'}", flush=True)
+            fill()
+        else:
+            QTimer.singleShot(200, wait_engine)
+
+    QTimer.singleShot(500, wait_engine)
     code = app.exec()
     na.shutdown(app, win)
     os._exit(code)
