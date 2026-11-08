@@ -150,7 +150,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: assets
+          path: release-assets
           merge-multiple: true
       - name: Publish
         env:
@@ -159,5 +159,5 @@ jobs:
         run: |
           # Release 說明 = CHANGELOG.md 裡這一版的更新內容 + 下載安裝說明
           python3 tools/release_notes.py "${TAG#v}" > notes.md
-          gh release create "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+          gh release create "$TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "YT 下載器 ${TAG}" --notes-file notes.md --latest
