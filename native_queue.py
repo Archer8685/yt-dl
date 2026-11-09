@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 import shiboken6
-from PySide6.QtCore import QT_TRANSLATE_NOOP, QCoreApplication, QEvent, QPointF, QRectF, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QT_TRANSLATE_NOOP, QCoreApplication, QEvent, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -248,6 +248,13 @@ class LogDialog(QDialog):
 # --------------------------------------------------------------------------- #
 #  一個工作一列
 # --------------------------------------------------------------------------- #
+class _Actions(QWidget):
+    """一列的動作連結。最小寬度回報 0：不讓它撐大整列的最小寬度，放不下時由 JobRow 換到下一行。"""
+
+    def minimumSizeHint(self):
+        return QSize(0, super().minimumSizeHint().height())
+
+
 class JobRow(QWidget):
     def __init__(self, api: Api, on_change, toast=None):
         super().__init__()
@@ -269,9 +276,13 @@ class JobRow(QWidget):
         self.title = label("", "rowTitle", plain=True)
         self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         top.addWidget(self.title, 1)
-        self.buttons = QHBoxLayout()
+        # 動作連結：放得下時在標題右邊；這一列太窄（最小視窗、英文較長、動作多）時移到標題下一行（_fit_actions）
+        self.actions_box = _Actions()
+        self.buttons = QHBoxLayout(self.actions_box)
+        self.buttons.setContentsMargins(0, 0, 0, 0)
         self.buttons.setSpacing(6)
-        top.addLayout(self.buttons)
+        top.addWidget(self.actions_box)
+        self._top = top
         self.more = QToolButton()
         self.more.setText("⋯")
         self.more.setObjectName("link")
@@ -284,6 +295,11 @@ class JobRow(QWidget):
         self.more.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }")
         top.addWidget(self.more)
         lay.addLayout(top)
+        self._wrap_row = QHBoxLayout()  # 動作連結換到第二行時的位置（靠右，和原本的位置對齊）
+        self._wrap_row.setContentsMargins(0, 0, 0, 0)
+        self._wrap_row.addStretch()
+        lay.addLayout(self._wrap_row)
+        self._wrapped = False
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
         lay.addWidget(self.bar)
@@ -343,6 +359,32 @@ class JobRow(QWidget):
             b.setToolTip(tip)
             b.clicked.connect(fn)
             self.buttons.addWidget(b)
+        self._fit_actions()
+
+    # ---------- 版面 ----------
+    TITLE_MIN = 120  # 動作連結留在標題右邊時，標題至少要留的寬度
+
+    def _fit_actions(self):
+        """這一列放不下「標題＋動作連結」時，把動作連結移到標題下一行；放得下時移回來。"""
+        if self.width() <= 0:
+            return
+        m = self.layout().contentsMargins()
+        need = (m.left() + m.right() + self.icon.width() + self.TITLE_MIN + self.actions_box.sizeHint().width()
+                + self.more.sizeHint().width() + 3 * self._top.spacing())
+        wrap = self.width() < need
+        if wrap == self._wrapped:
+            return
+        self._wrapped = wrap
+        if wrap:
+            self._top.removeWidget(self.actions_box)
+            self._wrap_row.addWidget(self.actions_box)
+        else:
+            self._wrap_row.removeWidget(self.actions_box)
+            self._top.insertWidget(self._top.indexOf(self.more), self.actions_box)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit_actions()
 
     def _set_menu(self):
         key = (bool(self.job.get("error") or self.job.get("error_detail")), self.job.get("status") in ACTIVE)
@@ -799,16 +841,21 @@ class QueuePage(QWidget):
         lay = page_layout(self)
         self.scroll = self.findChild(QScrollArea)
 
+        # 狀態文字一行（可換行）、批次按鈕另一行：放在同一行時最小視窗（720px）中英文都會超出右邊
         self.bulk = QWidget()
-        bl = QHBoxLayout(self.bulk)
-        bl.setContentsMargins(0, 0, 0, 0)
+        vl = QVBoxLayout(self.bulk)
+        vl.setContentsMargins(0, 0, 0, 0)
+        vl.setSpacing(6)
+        self.summary_label = label("", "subtitle", wrap=True)
+        vl.addWidget(self.summary_label)
+        bl = QHBoxLayout()
         bl.setSpacing(8)
-        self.summary_label = label("", "subtitle")
-        bl.addWidget(self.summary_label, 1)
+        vl.addLayout(bl)
         self.pause_all_btn = self._bulk_button(self.tr("暫停全部"), self.pause_all, bl)
         self.resume_all_btn = self._bulk_button(self.tr("繼續全部"), self.resume_all, bl)
         self.retry_all_btn = self._bulk_button(self.tr("全部重試"), self.retry_all, bl)
         self.clear_btn = self._bulk_button(self.tr("清除已完成"), self.clear_finished, bl)
+        bl.addStretch()
         self.clear_btn.setToolTip(self.tr("從清單移除所有已完成的工作，檔案會留在原處"))
         self.bulk.hide()
         lay.addWidget(self.bulk)

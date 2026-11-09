@@ -191,7 +191,7 @@ YT 下載器是一個桌面 App（Windows／macOS），可以下載 YouTube 與 
 | 外觀 | 主題：跟隨系統／淺色／深色；文字大小：小／中／大（整個介面一起縮放）；語言：跟隨系統／中文（繁體）／English（切換後要重新啟動 App） |
 | 下載預設值 | 每次開啟時的下載模式、畫質、影片格式、音訊格式、音質，以及是否下載整個播放清單；改了立刻套用。「重設所有偏好…」會把外觀、下載預設值和進階選項恢復成剛安裝時的設定（會先詢問；儲存位置、cookies.txt 和已下載的檔案不受影響） |
 | 儲存位置 | 顯示下載資料夾與剩餘空間；「變更…」「在檔案總管（Finder）中打開」「改回預設資料夾」 |
-| YouTube Premium | 用目前的 Cookie 檢查帳號是否登入、是否有 Premium，並顯示上次檢查時間；「重新檢查」「更新 cookies.txt…」 |
+| Cookie 與 YouTube Premium | 用目前的 Cookie 檢查帳號是否登入、是否有 Premium，並顯示上次檢查時間；「重新檢查」「更新 cookies.txt…」 |
 | 下載元件 | yt-dlp 與 FFmpeg 的狀態；「檢查更新」，下載好新版後按「重新啟動以套用」 |
 | 關於 | App 版本（有新版時會顯示）、使用聲明摘要、使用說明、回報問題、授權（MIT）與第三方授權 |
 
@@ -300,7 +300,7 @@ App 內建 FFmpeg，找不到通常是防毒軟體把它（`bin\ffmpeg.exe`）�
 <a id="err-cookie-browser"></a>
 
 **「無法讀取瀏覽器的 Cookie」**
-選了「直接讀取瀏覽器的 Cookie」時，Chrome／Edge 開著會鎖住 Cookie 檔；新版的 Chrome／Edge 在 Windows 上也加密了 Cookie，外部程式讀不到。請改用下列其中一種方式：
+Cookie 來源選了「從瀏覽器讀取」時，Chrome／Edge 開著會鎖住 Cookie 檔；新版的 Chrome／Edge 在 Windows 上也加密了 Cookie，外部程式讀不到。請改用下列其中一種方式：
 
 1. 完全關閉 Chrome／Edge（包括系統匣裡的背景程式）再試。
 2. 改選 Firefox（Firefox 開著也能讀）。
@@ -339,8 +339,8 @@ App 內部的下載引擎遇到預期之外的問題。先重試一次；還是�
 
 1. 用電腦的瀏覽器**先登入你的 YouTube 帳號**，確認影片可以播放。
 2. 安裝匯出 Cookie 的瀏覽器擴充功能（例如「Get cookies.txt LOCALLY」），在 youtube.com 頁面上按擴充功能，匯出 `youtube.com` 的 cookies.txt（Netscape 格式）。
-3. 在 App 的「設定 → YouTube Premium」按「更新 cookies.txt…」選擇剛匯出的檔案，App 會自動檢查帳號狀態。偵測到 Premium 時會自動開啟「Premium 高位元率」。
-   - 也可以在「新增下載 → 進階選項 → 網路」改成直接讀取瀏覽器的 Cookie（Windows 上的 Chrome／Edge 常讀不到，見 [無法讀取瀏覽器的 Cookie](#err-cookie-browser)）。
+3. 在 App 的「設定 → Cookie 與 YouTube Premium」按「更新 cookies.txt…」選擇剛匯出的檔案，App 會自動檢查帳號狀態。偵測到 Premium 時會自動開啟「Premium 高位元率」。
+   - 也可以在「新增下載 → 進階選項 → 網路」把 Cookie 來源改成「從瀏覽器讀取」（Windows 上的 Chrome／Edge 常讀不到，見 [無法讀取瀏覽器的 Cookie](#err-cookie-browser)）。
 4. Cookie 過期（App 說未登入，或又出現驗證要求）時，重新匯出、再按一次「更新 cookies.txt…」即可。
 
 > [!WARNING]

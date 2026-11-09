@@ -404,7 +404,7 @@ class SettingsPage(QWidget):
         self.ffmpeg = label("", "subtitle")
         card2.add(form_row("FFmpeg", self.ffmpeg))
         lay.addWidget(card2)
-        lay.addWidget(label(self.tr("yt-dlp 會在背景自動更新，YouTube 改版時通常不需要手動處理。"), "subtitle", wrap=True))
+        lay.addWidget(label(self.tr("yt-dlp 會在背景自動更新，YouTube 改版時通常不需要手動處理。"), "hint", wrap=True))
         self._anchors["components"] = (comp_head, self.update_btn)
 
         # ---------- 關於：版本、App 新版、說明與回報、授權、免責聲明 ----------
@@ -463,8 +463,8 @@ class SettingsPage(QWidget):
         self.license_text = label(self.tr("以 MIT 授權開放原始碼。也使用了 yt-dlp、FFmpeg、Qt（PySide6）等第三方軟體，"
                                           "各自依其授權條款提供。"), "hint", wrap=True)
         ll.addWidget(self.license_text)
-        self.disclaimer_text = label(_tr("native_common", DISCLAIMER_SHORT).replace("\n", ""), "hint",
-                                     wrap=True, plain=True)
+        # 兩句之間保留換行：拿掉換行直接接起來，英文會變成「…Google.Only download…」（少了空白）
+        self.disclaimer_text = label(_tr("native_common", DISCLAIMER_SHORT), "hint", wrap=True, plain=True)
         ll.addWidget(self.disclaimer_text)
         lrow = QHBoxLayout()
         lrow.setContentsMargins(0, 4, 0, 0)

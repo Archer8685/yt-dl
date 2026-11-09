@@ -3,8 +3,7 @@
 1. 介面檔裡使用者看得到的中文字串都包了翻譯函式（self.tr／QCoreApplication.translate／_tr／
    QT_TRANSLATE_NOOP）。用 AST 掃描：中文字串常值只能出現在翻譯函式的參數、docstring、log／print，
    或下面 ALLOWED 列出的地方。
-2. 翻譯檔 i18n/yt_dl_en.ts 沒有未翻譯的項目。英文翻譯由 I2 補，補完之前這項測試標 xfail
-   （strict=False：I2 補完後會自動變成 XPASS，屆時把 xfail 拿掉）；未翻譯數量照樣印在測試訊息裡。
+2. 翻譯檔 i18n/yt_dl_en.ts 沒有未翻譯的項目（I2 已補完）。改了介面字串後重新抽字串，新字串補好翻譯才會通過。
 3. engine_messages.py 的每個錯誤代碼在 USER_GUIDE.md 和 USER_GUIDE.en.md 都有錨點。
 """
 from __future__ import annotations
@@ -151,8 +150,8 @@ def _untranslated_messages() -> list[str]:
     return out
 
 
-@pytest.mark.xfail(strict=False, reason="英文翻譯由 I2 補；補完後這項會 XPASS，請拿掉 xfail")
 def test_ts_file_fully_translated():
+    """改了介面字串後跑 python tools/i18n_update.py --no-release：新字串會是 unfinished，這項會失敗直到補完翻譯。"""
     assert any(True for _ in _messages()), "翻譯檔還是空的：先跑 python tools/i18n_update.py 抽字串"
     missing = _untranslated_messages()
     assert not missing, f"{len(missing)} 個未翻譯：\n" + "\n".join(missing[:30])
