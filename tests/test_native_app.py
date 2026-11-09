@@ -886,14 +886,15 @@ def test_settings_badge_for_ytdlp_and_app_updates(win):
 
 def test_window_geometry_is_remembered(app):
     w = na.MainWindow(FakeApi(), lambda: False)
-    w.resize(760, 560)
+    width = na.MIN_WINDOW_WIDTH  # differs from the default 1000; offscreen screens are 800 wide, so stay within it
+    w.resize(width, 560)
     w.move(40, 50)
     w.save_geometry()
     w._quitting = True
     w.close()
     w2 = na.MainWindow(FakeApi(), lambda: False)
     assert w2.size().width() == 1000  # 建立時是預設大小，main() 呼叫 restore_geometry 才套用
-    assert w2.restore_geometry() and w2.size().width() == 760 and w2.size().height() == 560
+    assert w2.restore_geometry() and w2.size().width() == width and w2.size().height() == 560
     w2._quitting = True
     w2.close()
 
