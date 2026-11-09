@@ -701,7 +701,10 @@ class MainWindow(QMainWindow):
         if urls:
             self.go(0)
             self.download.accept_urls(urls)
-        if rejected:
+        if rejected and all(url_handoff.rejected_as_local(a) for a in rejected):
+            self.toast(self.tr("這個連結無法開啟：從瀏覽器送進來的網址不能指向這台電腦（localhost、127.0.0.1 等）。"),
+                       level="error")
+        elif rejected:
             self.toast(self.tr("這個連結無法開啟：App 只接受 http:// 或 https:// 開頭的影片網址。"), level="error")
 
 

@@ -48,17 +48,28 @@ Intel Macs are not supported. The app isn't code-signed, so Windows and macOS wa
 
 | 檔案 | 負責 |
 | --- | --- |
-| `native_app.py` | App 進入點與主視窗：側邊欄、「新增下載」、「下載佇列」、「設定」頁；樣式表與主題、剪貼簿自動貼上、免責聲明對話框、macOS 毛玻璃側邊欄 |
+| `native_app.py` | App 進入點與主視窗：側邊欄與三個頁面的切換、單一實例與 `ytdl://` 接線、系統匣、拖放、快捷鍵、引擎離線提示、視窗位置記憶、macOS 毛玻璃側邊欄 |
+| `native_common.py` | 介面共用部分：主題與樣式、引擎 API（`Api`，帶 `Accept-Language`）、共用元件（`Card`、`Segmented`、`Banner`、`form_row`…）、設定存取、免責聲明 |
+| `native_download.py` | 「新增下載」頁：貼上／批次貼上網址、解析、選格式、加入佇列 |
+| `native_queue.py` | 「下載佇列」頁：進度、暫停／繼續、重試、移除（預設保留檔案）、錯誤詳細資訊、全部操作 |
+| `native_settings.py` | 「設定」頁：一般（關閉視窗行為、同時下載數）、外觀與語言、下載預設值、儲存位置、Cookie、下載元件、關於 |
 | `native_options.py` | 「進階選項」面板（編碼、音軌、字幕、剪輯、SponsorBlock、中繼資料、Cookie／代理／限速）與共用元件（`Switch` 等） |
 | `native_playlist.py` | 播放清單選擇：勾選、搜尋、範圍、縮圖延遲載入 |
+| `native_tray.py` | 系統匣（macOS 選單列）圖示、選單、進度提示與系統通知 |
+| `single_instance.py` | 單一實例：第二次開啟時把參數交給已在執行的 App（`QLocalServer`） |
+| `url_handoff.py` | 從命令列或 macOS 開啟事件取出網址；`ytdl://add?url=…` 只接受 http/https，拒絕本機位址 |
+| `i18n.py` | 介面語言（跟隨系統／中文／English）設定與翻譯檔載入；字串寫法見 `docs/I18N.md`，翻譯檔在 `i18n/` |
+| `app_update.py` | App 新版提示：查 GitHub Releases 最新版（只提示、不自動下載） |
 | `app_boot.py` | 啟動流程：命令列參數、匯入引擎（含自動更新的 yt-dlp）、背景啟動引擎、紀錄檔、`--smoke-test` |
-| `server.py` | 下載引擎（Flask + yt-dlp）：解析、佇列、續傳、磁碟空間檢查、cookies、Premium 檢查；也提供網頁版介面 `index.html` |
+| `server.py` | 下載引擎（Flask + yt-dlp）：解析、佇列、暫停／續傳、播放清單部分失敗、磁碟空間檢查、cookies、Premium 檢查；也提供網頁版介面 `index.html` |
+| `engine_messages.py` | 引擎訊息：把 yt-dlp 錯誤翻成看得懂的中英文訊息（錯誤代碼、建議動作、FAQ 錨點）與處理階段文字 |
 | `ytdlp_update.py` | yt-dlp 自動更新：從 PyPI 下載新版到使用者資料夾，驗證能載入後才啟用，失敗退回內建版 |
 | `build_app.py` | 打包：下載 FFmpeg／ffprobe／Deno → 產生 PyInstaller spec → Inno Setup 安裝精靈或 dmg |
 | `index.html` | 網頁版介面（引擎直接提供，也部署到 GitHub Pages 連本機引擎） |
 | `tools/release_notes.py` | 由 `CHANGELOG.md` 該版段落產生 Release 說明（下載表＋更新內容＋安裝與放行步驟＋校驗方式＋免責聲明） |
 | `tools/ui_screenshot.py` | 以範例資料開啟 App 並截三個頁面（淺色／深色） |
-| `tests/` | pytest：引擎 API、介面元件（offscreen Qt）、啟動流程、Release 說明 |
+| `tools/i18n_update.py` | 抽出介面字串更新 `i18n/yt_dl_en.ts`，並編譯成 `.qm` |
+| `tests/` | pytest：引擎 API 與可靠度、錯誤訊息、介面元件（offscreen Qt）、無障礙、最小視窗版面、翻譯完整性、啟動流程、單一實例與 `ytdl://`、打包與文件、Release 說明 |
 
 其他：`VERSION`（App 版本，發布觸發點）、`CHANGELOG.md`、`DISCLAIMER.md`、`USER_GUIDE.md`／`USER_GUIDE.en.md`（使用說明中英文版）、`LICENSE`、`THIRD_PARTY_NOTICES.md`、`.github/ISSUE_TEMPLATE/`（回報問題／功能建議表單）、`assets/`（圖示）、`start.bat`／`start.sh`（只跑引擎＋網頁版）。
 

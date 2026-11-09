@@ -1358,7 +1358,7 @@ async function loadMeta() {
     $("#updateBtn").classList.toggle("hidden", !canUpdate && !m.update_running);
     $("#updateBtn").disabled = !!m.update_running;
     $("#updateBtn").textContent = m.update_running ? "更新中…" : m.update_ready ? `重新啟動以套用 yt-dlp ${m.update_ready}` : `更新至 ${m.latest}`;
-    if (m.update_message && !m.update_running && /失敗/.test(m.update_message)) toast(m.update_message, "err");
+    if (m.update_message && !m.update_running && m.update_failed) toast(m.update_message, "err");
     if (m.just_updated && !sessionStorage.getItem("ytdl-updated-toast")) { toast(`yt-dlp 已自動更新至 ${m.version}`, "ok"); try { sessionStorage.setItem("ytdl-updated-toast", "1"); } catch {} }
     if (!m.cookies_file) renderCookieFile(false, 0);
     if (m.update_running) metaTimer = setTimeout(loadMeta, 2000);

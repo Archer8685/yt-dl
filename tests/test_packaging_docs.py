@@ -124,6 +124,7 @@ def test_spec_compiles_and_registers_url_scheme_on_macos():
     ("i18n/yt_dl_en.qm", True),  # App 自己的翻譯檔不能被 Qt 的過濾規則刪掉
     ("LICENSE", True),
     ("THIRD_PARTY_NOTICES.md", True),
+    ("DISCLAIMER.md", True),
 ])
 def test_spec_keeps_only_supported_translations(path, kept):
     assert spec_keep()(path, "c:/site-packages/" + path) is kept
@@ -141,7 +142,7 @@ def test_translation_datas_skip_missing_qm(tmp_path, monkeypatch):
 
 def test_license_files_are_bundled():
     datas = build_app.doc_datas()
-    assert [Path(src).name for src, _ in datas] == ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+    assert [Path(src).name for src, _ in datas] == ["LICENSE", "THIRD_PARTY_NOTICES.md", "DISCLAIMER.md"]
     assert all(Path(src).is_file() and dest == "." for src, dest in datas)
 
 

@@ -275,9 +275,15 @@ URL_SCHEME = "ytdl"  # ytdl://add?url=<encodeURIComponent 後的 http/https 網�
 KEEP_TRANSLATIONS = ["qtbase_zh_tw", "qtbase_en", "qt_zh_tw", "qt_en"]
 
 
+DOC_FILES = ("LICENSE", "THIRD_PARTY_NOTICES.md", "DISCLAIMER.md")
+
+
 def doc_datas() -> list[tuple[str, str]]:
-    """授權與第三方授權說明：放在 App 資料夾最上層，安裝後也看得到。"""
-    return [(str(ROOT / name), ".") for name in ("LICENSE", "THIRD_PARTY_NOTICES.md")]
+    """授權、第三方授權說明與免責聲明：放在 App 資料夾最上層，安裝後也看得到。
+
+    DISCLAIMER.md 讓「查看完整聲明」直接在 App 裡顯示（native_common.disclaimer_markdown 從 _MEIPASS 讀）。
+    """
+    return [(str(ROOT / name), ".") for name in DOC_FILES]
 
 
 def translation_datas() -> list[tuple[str, str]]:

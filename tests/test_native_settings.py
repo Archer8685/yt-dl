@@ -122,8 +122,9 @@ def test_update_button_reports_result_from_meta(app, monkeypatch):
     meta[4]("Operation canceled")  # 查詢狀態逾時：稍後再查，不是更新失敗
     assert not page.update_btn.isEnabled()
     assert wait_until(lambda: len([c for c in api.calls if c[1] == "/api/meta"]) >= 2, 5000)
-    api.last("/api/meta")[3]({"update_running": False, "update_message": "更新失敗：網路錯誤", "version": "1"})
-    assert toasts[-1] == ("更新失敗：網路錯誤", True)
+    api.last("/api/meta")[3]({"update_running": False, "update_message": "Update failed: network error",
+                              "update_failed": True, "version": "1"})
+    assert toasts[-1] == ("Update failed: network error", True)  # 依 update_failed 判斷，不比對中文前綴
     assert page.update_btn.isEnabled()
 
 
@@ -283,10 +284,10 @@ def test_settings_about_shows_version_and_disclaimer_link(app, monkeypatch):
     assert nc.app_version() == version
     assert page.app_version.text() == version
     assert "有權" in page.disclaimer_text.text()
-    opened = []
-    monkeypatch.setattr(ns.QDesktopServices, "openUrl", lambda u: opened.append(u.toString()))
+    shown = []  # 和第一次開啟的聲明對話框一樣：有打包 DISCLAIMER.md 就在 App 裡顯示，沒有才開 GitHub
+    monkeypatch.setattr(ns, "show_full_disclaimer", lambda parent=None: shown.append(parent))
     page.disclaimer_link.click()
-    assert opened == [nc.DISCLAIMER_URL]
+    assert shown == [page.window()]
 
 
 # --------------------------------------------------------------------------- #

@@ -664,6 +664,13 @@ def test_handoff_rejects_non_http_links_with_message(win, arg):
     assert win.banner.property("error") is True and "http" in win.banner.text()
 
 
+def test_handoff_to_this_computer_explains_why(win):
+    """ytdl:// 帶本機位址被拒絕時，說明原因是「指向這台電腦」，不是說只接受 http（它本來就是 http）。"""
+    win.handle_handoff(["ytdl://add?url=http%3A%2F%2F127.0.0.1%3A8765%2Fapi%2Fjobs"])
+    assert not [c for c in win.api_fake.calls if c[1] == "/api/info"]
+    assert win.banner.property("error") is True and "127.0.0.1" in win.banner.text()
+
+
 def test_second_launch_without_url_just_wakes_window(win):
     win.hide()
     win.handle_handoff([])

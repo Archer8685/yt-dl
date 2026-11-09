@@ -435,7 +435,11 @@ def _json_errors(e):
 # --------------------------------------------------------------------------- #
 _LATEST = {"version": None, "data": None, "checked": 0.0}
 # ready：打包版已下載好、重新啟動後就會使用的 yt-dlp 版本
+# message：「更新 yt-dlp」結果的代碼與參數 (code, params)，見 engine_messages.update_text；/api/meta 回應時依語言組成文字
 UPDATE_STATE = {"running": False, "message": None, "ready": None}
+# app_upgrade() 回傳的固定訊息（紀錄檔用的中文；/api/update 依這兩個值換成代碼）
+UPGRADE_PYPI_UNREACHABLE = "無法連線到 PyPI"
+UPGRADE_UP_TO_DATE = "已是最新版"
 _vtuple = ytdlp_update.vtuple
 
 
@@ -489,9 +493,9 @@ def app_upgrade() -> tuple[bool, str]:
 def _app_upgrade() -> tuple[bool, str]:
     latest = latest_version(force=True)
     if not latest or not _LATEST["data"]:
-        return False, "無法連線到 PyPI"
+        return False, UPGRADE_PYPI_UNREACHABLE
     if _vtuple(latest) <= _vtuple(UPDATE_STATE["ready"] or yt_dlp.version.__version__):
-        return True, "已是最新版"
+        return True, UPGRADE_UP_TO_DATE
     try:
         ytdlp_update.install(ROOT, latest, _LATEST["data"], _verify_ytdlp)
     except Exception as e:  # noqa: BLE001
@@ -982,7 +986,7 @@ AUTO_RESUME = 3  # 下載途中斷線時自動續傳的次數（每次都會重�
 RESUME_DELAY = 5
 # 網路類錯誤（DNS 失敗、逾時、5xx、429）即使還沒下載到資料也重試，每次等待的秒數（R10）
 NET_BACKOFF = (5, 15, 60)
-NET_CODES = ("network_dns", "network_timeout", "rate_limited")
+NET_CODES = ("network_dns", "network_timeout", "rate_limited", "server_error")
 LOG_TAIL = 30  # 工作失敗時寫進 engine.log 的紀錄行數
 
 # 判斷「真的下載到了」：影片／音訊容器（字幕模式看字幕檔、縮圖模式看圖片），縮圖和字幕不算主檔（R2）
@@ -1482,7 +1486,7 @@ def _trim_length(job_dir: Path) -> int:
 
 def _is_network_err(e) -> bool:
     """網路類錯誤（DNS、逾時、429）與伺服器暫時錯誤（HTTP 5xx）：就算沒進度也值得等一下再試。"""
-    return em.classify(e) in NET_CODES or bool(re.search(r"HTTP Error 5\d\d", str(e)))
+    return em.classify(e) in NET_CODES
 
 
 def _clean_err(e: BaseException) -> str:
@@ -2100,13 +2104,16 @@ def api_zip(job_id):
 @app.get("/api/meta")
 def api_meta():
     d = get_download_dir()
+    code, params = UPDATE_STATE["message"] or (None, {})
     return jsonify(version=yt_dlp.version.__version__, latest=cached_latest_version(), channel=CHANNEL,
                    frozen=FROZEN, update_ready=UPDATE_STATE["ready"],
                    ffmpeg=bool(shutil.which("ffmpeg")), cookies_file=COOKIES_FILE.is_file(),
                    disk=disk_info(d), min_free=MIN_FREE_BYTES,
                    download_dir=str(d), **download_dir_status(d), parallel=SCHED.limit,
                    just_updated=os.environ.get("YTDL_JUST_UPDATED") == "1",
-                   update_running=UPDATE_STATE["running"], update_message=UPDATE_STATE["message"])
+                   update_running=UPDATE_STATE["running"],
+                   update_status=code, update_failed=code in em.UPDATE_FAILED_CODES,
+                   update_message=em.update_text(code, req_lang(), **params))
 
 
 def list_drives() -> list[dict]:
@@ -2179,12 +2186,18 @@ def api_update():
         return api_error("unknown", 409, msg="update_busy", action=None)
 
     def work():
-        UPDATE_STATE.update(running=True, message="更新中…")
+        UPDATE_STATE.update(running=True, message=("running", {}))
         ok, out = (True, "") if UPDATE_STATE["ready"] else upgrade()
         if ok and FROZEN and not UPDATE_STATE["ready"]:  # PyPI 上沒有更新的版本
-            UPDATE_STATE.update(running=False, message=out)
+            UPDATE_STATE.update(running=False, message=("up_to_date", {}))
             return
-        UPDATE_STATE.update(running=False, message="更新完成，重新啟動中" if ok else f"更新失敗：{out}")
+        if ok:
+            message = ("restarting", {})
+        elif out == UPGRADE_PYPI_UNREACHABLE:
+            message = ("pypi_unreachable", {})
+        else:
+            message = ("failed", {"detail": out or "?"})
+        UPDATE_STATE.update(running=False, message=message)
         if ok:
             time.sleep(1.0)
             restart_process()

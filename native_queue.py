@@ -52,9 +52,9 @@ import i18n
 from native_common import (
     ACTIVE,
     IS_MAC,
-    TITLE,
     Api,
     Card,
+    app_title,
     fmt_bytes,
     fmt_eta,
     label,
@@ -640,7 +640,7 @@ class JobRow(QWidget):
         if has_progress:
             box = QMessageBox(self.window())
             box.setIcon(QMessageBox.Warning)
-            box.setWindowTitle(TITLE)
+            box.setWindowTitle(app_title())
             box.setText(self.tr("要取消「{title}」嗎？").format(title=job.get("title") or job.get("url") or ""))
             box.setInformativeText(self.tr("已下載的暫存資料會刪除，之後無法接著下載。如果只是想先停下來，請選「暫停」。"))
             stop = box.addButton(self.tr("取消下載"), QMessageBox.DestructiveRole)
@@ -701,7 +701,7 @@ class JobRow(QWidget):
         if files:
             box = QMessageBox(self.window())
             box.setIcon(QMessageBox.Question)
-            box.setWindowTitle(TITLE)
+            box.setWindowTitle(app_title())
             box.setText(self.tr("要從清單移除「{title}」嗎？").format(title=title))
             size = fmt_bytes(sum(f.get("size") or 0 for f in files))
             if IS_MAC:
@@ -728,7 +728,7 @@ class JobRow(QWidget):
         elif partial:
             box = QMessageBox(self.window())
             box.setIcon(QMessageBox.Warning)
-            box.setWindowTitle(TITLE)
+            box.setWindowTitle(app_title())
             box.setText(self.tr("要從清單移除「{title}」嗎？").format(title=title))
             box.setInformativeText(self.tr("已下載 {size} 的暫存資料會一起刪除，之後就無法接著下載。")
                                    .format(size=fmt_bytes(partial)))

@@ -1049,3 +1049,32 @@ def test_steps_failed_warning_keeps_raw_reason(scripted):
     server.run_job(job)
     assert job.warnings[0]["args"]["detail"] == "Postprocessing: Conversion failed!"
     assert "Conversion failed" not in job.to_dict(lang="zh")["warnings"][0]
+
+
+@pytest.mark.parametrize("result, status, failed, zh, en", [
+    ((False, server.UPGRADE_PYPI_UNREACHABLE), "pypi_unreachable", True,
+     "更新失敗：無法連線到 PyPI", "Update failed: can't connect to PyPI"),
+    ((False, "boom"), "failed", True, "更新失敗：boom", "Update failed: boom"),
+    ((True, server.UPGRADE_UP_TO_DATE), "up_to_date", False, "已是最新版", "Already up to date"),
+])
+def test_update_result_is_a_code_rendered_per_language(client, monkeypatch, result, status, failed, zh, en):
+    """「更新 yt-dlp」的結果存代碼，/api/meta 依 Accept-Language 組成文字，並直接告訴 App 是不是失敗。"""
+    monkeypatch.setattr(server, "FROZEN", True)
+    monkeypatch.setitem(server.UPDATE_STATE, "ready", None)
+    monkeypatch.setitem(server.UPDATE_STATE, "message", None)
+    monkeypatch.setattr(server, "upgrade", lambda: result)
+    monkeypatch.setattr(server, "restart_process", lambda: pytest.fail("沒有下載新版時不能重新啟動"))
+    assert client.post("/api/update").status_code == 200
+    deadline = time.time() + 2
+    while server.UPDATE_STATE["running"] or server.UPDATE_STATE["message"] is None:
+        assert time.time() < deadline
+        time.sleep(0.01)
+    meta = client.get("/api/meta").get_json()
+    assert (meta["update_status"], meta["update_failed"], meta["update_message"]) == (status, failed, zh)
+    assert client.get("/api/meta", headers=EN).get_json()["update_message"] == en
+
+
+def test_no_update_message_before_any_update(client, monkeypatch):
+    monkeypatch.setitem(server.UPDATE_STATE, "message", None)
+    meta = client.get("/api/meta", headers=EN).get_json()
+    assert meta["update_message"] is None and meta["update_status"] is None and meta["update_failed"] is False

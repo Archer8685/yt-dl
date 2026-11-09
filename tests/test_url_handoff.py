@@ -169,6 +169,20 @@ def test_odd_numeric_hosts_do_not_crash(host):
     assert parse_handoff(f"ytdl://add?url={enc(url)}") in (url, None)
 
 
+@pytest.mark.parametrize("arg, local", [
+    (f"ytdl://add?url={enc('http://127.0.0.1:8765/api/jobs')}", True),
+    (f"ytdl://add?url={enc('http://localhost/x')}", True),
+    (f"ytdl://add?url={enc('javascript:alert(1)')}", False),  # 協定不對，不是「指向這台電腦」
+    (f"ytdl://add?url={enc('file:///C:/Windows/win.ini')}", False),
+    (f"ytdl://add?url={enc(YT)}", False),  # 會被接受的網址
+    ("http://127.0.0.1/x", False),  # 直接給的網址不受限制
+    ("ytdl://add", False),
+])
+def test_rejected_as_local(arg, local):
+    from url_handoff import rejected_as_local
+    assert rejected_as_local(arg) is local
+
+
 def test_parse_args_filters_and_dedupes():
     args = ["--smoke-test", f"ytdl://add?url={enc(YT)}", YT, "javascript:alert(1)", "https://example.com/b"]
     assert parse_handoff_args(args) == [YT, "https://example.com/b"]

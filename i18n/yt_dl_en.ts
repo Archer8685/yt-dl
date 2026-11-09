@@ -4,7 +4,7 @@
 <context>
     <name>AdvancedOptions</name>
     <message>
-        <location filename="../native_options.py" line="+806"/>
+        <location filename="../native_options.py" line="+823"/>
         <source>進階選項</source>
         <translation>Advanced options</translation>
     </message>
@@ -722,7 +722,7 @@
 <context>
     <name>DisclaimerDialog</name>
     <message>
-        <location filename="../native_common.py" line="+284"/>
+        <location filename="../native_common.py" line="+311"/>
         <source>{app}：完整使用聲明</source>
         <translation>{app}: Full disclaimer</translation>
     </message>
@@ -1052,37 +1052,37 @@
 <context>
     <name>JobRow</name>
     <message>
-        <location filename="../native_queue.py" line="+280"/>
+        <location filename="../native_queue.py" line="+291"/>
         <location line="+1"/>
         <source>更多動作</source>
         <translation>More actions</translation>
     </message>
     <message>
-        <location line="+29"/>
-        <location line="+46"/>
+        <location line="+34"/>
+        <location line="+72"/>
         <source>複製錯誤訊息</source>
         <translation>Copy error message</translation>
     </message>
     <message>
-        <location line="-45"/>
-        <location line="+242"/>
+        <location line="-71"/>
+        <location line="+268"/>
         <location line="+62"/>
         <source>重試失敗的項目</source>
         <translation>Retry failed items</translation>
     </message>
     <message>
-        <location line="-303"/>
-        <location line="+41"/>
+        <location line="-329"/>
+        <location line="+67"/>
         <source>顯示紀錄</source>
         <translation>Show log</translation>
     </message>
     <message>
-        <location line="-40"/>
+        <location line="-66"/>
         <source>常見問題</source>
         <translation>FAQ</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+67"/>
         <source>複製網址</source>
         <translation>Copy link</translation>
     </message>
@@ -1466,7 +1466,7 @@
 <context>
     <name>LogDialog</name>
     <message>
-        <location line="-576"/>
+        <location line="-618"/>
         <location line="+12"/>
         <source>下載紀錄</source>
         <translation>Download log</translation>
@@ -1689,6 +1689,11 @@ Downloading and analyzing aren&apos;t available right now. Click “Retry”; if
     </message>
     <message>
         <location line="+53"/>
+        <source>這個連結無法開啟：從瀏覽器送進來的網址不能指向這台電腦（localhost、127.0.0.1 等）。</source>
+        <translation>This link can&apos;t be opened: links sent from the browser can&apos;t point to this computer (localhost, 127.0.0.1, etc.).</translation>
+    </message>
+    <message>
+        <location line="+3"/>
         <source>這個連結無法開啟：App 只接受 http:// 或 https:// 開頭的影片網址。</source>
         <translation>This link can&apos;t be opened: the app only accepts video links that start with http:// or https://.</translation>
     </message>
@@ -1837,26 +1842,26 @@ Downloading and analyzing aren&apos;t available right now. Click “Retry”; if
 <context>
     <name>QueuePage</name>
     <message>
-        <location filename="../native_queue.py" line="+566"/>
-        <location line="+211"/>
+        <location filename="../native_queue.py" line="+612"/>
+        <location line="+212"/>
         <source>暫停全部</source>
         <translation>Pause all</translation>
     </message>
     <message>
-        <location line="-210"/>
-        <location line="+214"/>
+        <location line="-211"/>
+        <location line="+215"/>
         <source>繼續全部</source>
         <translation>Resume all</translation>
     </message>
     <message>
-        <location line="-213"/>
-        <location line="+217"/>
+        <location line="-214"/>
+        <location line="+218"/>
         <source>全部重試</source>
         <translation>Retry all</translation>
     </message>
     <message>
-        <location line="-216"/>
-        <location line="+220"/>
+        <location line="-217"/>
+        <location line="+221"/>
         <source>清除已完成</source>
         <translation>Clear completed</translation>
     </message>
@@ -1960,7 +1965,7 @@ Downloading and analyzing aren&apos;t available right now. Click “Retry”; if
 <context>
     <name>SectionHeader</name>
     <message>
-        <location filename="../native_options.py" line="-886"/>
+        <location filename="../native_options.py" line="-902"/>
         <source>已展開</source>
         <translation>Expanded</translation>
     </message>
@@ -2015,7 +2020,7 @@ Downloading and analyzing aren&apos;t available right now. Click “Retry”; if
     <message>
         <location line="+2"/>
         <source>選「縮到系統匣」時，關閉視窗後 App 會留在系統匣繼續下載；要完全結束請在系統匣圖示的選單按「結束」。同時下載數改了立刻生效，網路較慢時建議設 1 或 2。</source>
-        <translation>With “Minimize to the system tray”, the app stays in the system tray and keeps downloading after you close the window; to quit completely, click “Quit” in the tray icon&apos;s menu. Changes to simultaneous downloads take effect immediately; on a slow network, 1 or 2 is recommended.</translation>
+        <translation>With “Minimize to tray, keep downloading”, the app stays in the system tray and keeps downloading after you close the window; to quit completely, click “Quit” in the tray icon&apos;s menu. Changes to simultaneous downloads take effect immediately; on a slow network, 1 or 2 is recommended.</translation>
     </message>
     <message>
         <location line="+9"/>
@@ -2625,7 +2630,7 @@ Downloading and analyzing aren&apos;t available right now. Click “Retry”; if
 <context>
     <name>native_app</name>
     <message>
-        <location filename="../native_app.py" line="-616"/>
+        <location filename="../native_app.py" line="-619"/>
         <source>新增下載</source>
         <translation>Add Download</translation>
     </message>
@@ -2650,7 +2655,7 @@ Downloading and analyzing aren&apos;t available right now. Click “Retry”; if
         <translation>Settings</translation>
     </message>
     <message>
-        <location line="+864"/>
+        <location line="+867"/>
         <source>連接埠 {port} 可能被其他程式佔用，請關閉佔用的程式後重新啟動 App</source>
         <translation>Port {port} may be in use by another program. Close that program and restart the app</translation>
     </message>
@@ -2658,7 +2663,7 @@ Downloading and analyzing aren&apos;t available right now. Click “Retry”; if
 <context>
     <name>native_common</name>
     <message>
-        <location filename="../native_common.py" line="-807"/>
+        <location filename="../native_common.py" line="-834"/>
         <source>YT 下載器</source>
         <translation>YT Downloader</translation>
     </message>
@@ -2822,7 +2827,7 @@ Downloading and analyzing aren&apos;t available right now. Click “Retry”; if
         <translation>The download engine took too long to respond</translation>
     </message>
     <message>
-        <location line="+418"/>
+        <location line="+445"/>
         <source>YT 下載器只是下載工具，不提供、不託管任何影音內容，與 YouTube／Google 無任何關聯。
 請只下載你有權使用的內容，並遵守著作權法與各平台服務條款；不得用於侵權、散布盜版，或規避付費、DRM 等保護措施。使用者須自行承擔使用責任；本軟體以「現狀」提供，不提供任何保證。</source>
         <translation>YT Downloader is only a download tool. It doesn&apos;t provide or host any video or audio content and has no connection to YouTube or Google.
@@ -2878,7 +2883,7 @@ Only download content you have the right to use, and follow copyright law and ea
 <context>
     <name>native_options</name>
     <message>
-        <location filename="../native_options.py" line="-515"/>
+        <location filename="../native_options.py" line="-516"/>
         <location line="+4"/>
         <location line="+2"/>
         <source>自動</source>
@@ -3041,7 +3046,7 @@ Only download content you have the right to use, and follow copyright law and ea
 <context>
     <name>native_queue</name>
     <message>
-        <location filename="../native_queue.py" line="-962"/>
+        <location filename="../native_queue.py" line="-1009"/>
         <source>排隊中</source>
         <translation>Queued</translation>
     </message>

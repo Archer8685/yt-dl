@@ -37,7 +37,6 @@ from native_common import (
     AUDIO_QUALITY,
     CONTAINERS,
     DISCLAIMER_SHORT,
-    DISCLAIMER_URL,
     DOWNLOAD_DEFAULTS,
     FILE_MANAGER,
     FONT_SIZES,
@@ -62,6 +61,7 @@ from native_common import (
     save_ui_prefs,
     set_auto_paste,
     settings_store,
+    show_full_disclaimer,
     ui_prefs,
 )
 
@@ -473,7 +473,7 @@ class SettingsPage(QWidget):
         self.third_party_link = QPushButton(self.tr("第三方授權"))
         self.third_party_link.clicked.connect(lambda: self._open(THIRD_PARTY_URL))
         self.disclaimer_link = QPushButton(self.tr("查看完整免責聲明"))
-        self.disclaimer_link.clicked.connect(lambda: self._open(DISCLAIMER_URL))
+        self.disclaimer_link.clicked.connect(lambda: show_full_disclaimer(self.window()))
         for b in (self.license_link, self.third_party_link, self.disclaimer_link):
             b.setObjectName("link")
             lrow.addWidget(b)
@@ -881,7 +881,7 @@ class SettingsPage(QWidget):
                     return
                 self.update_btn.setEnabled(True)
                 msg = m.get("update_message") or ""
-                self.toast(msg or self.tr("已是最新版本"), error=msg.startswith("更新失敗"))
+                self.toast(msg or self.tr("已是最新版本"), error=bool(m.get("update_failed")))
                 self.on_meta(m)
 
             def again(e):  # 查詢狀態偶爾逾時（引擎正在下載新版）：稍後再查，不要當成更新失敗

@@ -513,3 +513,15 @@ def test_module_does_not_import_server():
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module.split(".")[0])
     assert "server" not in names
+
+
+@pytest.mark.parametrize("lang", ["zh", "en"])
+def test_update_text_is_bilingual_and_never_shows_placeholders(lang):
+    assert em.update_text(None, lang) is None
+    for code in em._UPDATE:
+        assert "{" not in em.update_text(code, lang, detail="x")
+        bare = em.update_text(code, lang)  # 缺參數時不能露出 {detail}
+        assert bare and "{" not in bare
+    assert em.update_text("failed", "en", detail="disk") == "Update failed: disk"
+    assert em.update_text("failed", "zh") == "更新失敗"
+    assert em.UPDATE_FAILED_CODES <= set(em._UPDATE)

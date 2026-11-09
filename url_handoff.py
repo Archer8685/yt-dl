@@ -76,6 +76,21 @@ def _as_text(arg) -> str | None:
 
 def _from_ytdl(text: str) -> str | None:
     """`ytdl://add?url=<編碼後的網址>`；也接受瀏覽器或 Windows 會補上的 `ytdl://add/?url=…`。"""
+    inner = _ytdl_inner(text)
+    return None if inner is None else _validate(inner, allow_loopback=False)
+
+
+def rejected_as_local(arg) -> bool:
+    """`ytdl://` 連結被拒絕的原因是「指向這台電腦」（本身是合法的 http/https 網址）：App 用不同的提示說明。"""
+    text = (_as_text(arg) or "").strip()
+    if text.split(":", 1)[0].lower() != SCHEME or len(text) > _MAX_RAW_LENGTH:
+        return False
+    inner = _ytdl_inner(text)
+    return inner is not None and _validate(inner) is not None and _validate(inner, allow_loopback=False) is None
+
+
+def _ytdl_inner(text: str) -> str | None:
+    """取出 `ytdl://add?url=…` 裡解碼一次後的網址（還沒檢查協定與主機）；格式不對回傳 None。"""
     if any(_is_bad_char(c) for c in text):
         return None
     try:
@@ -88,10 +103,9 @@ def _from_ytdl(text: str) -> str | None:
     if len(values) != 1:  # 沒有或多個 url 參數：不猜哪一個才對
         return None
     try:
-        decoded = unquote(values[0], errors="strict")  # 只解碼一次；不把 + 當空白（encodeURIComponent 會把空白編成 %20）
+        return unquote(values[0], errors="strict")  # 只解碼一次；不把 + 當空白（encodeURIComponent 會把空白編成 %20）
     except UnicodeDecodeError:
         return None
-    return _validate(decoded, allow_loopback=False)
 
 
 def _query_pairs(query: str):

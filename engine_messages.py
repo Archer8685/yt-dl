@@ -457,6 +457,30 @@ _STAGE_BARE: dict[str, dict[str, str]] = {
 
 STAGE_CODES: tuple[str, ...] = tuple(_STAGES)
 
+# 「更新 yt-dlp」的結果（/api/meta 的 update_message）：引擎只存代碼＋參數，回應時依語言組成文字
+_UPDATE: dict[str, dict[str, str]] = {
+    "running": {"zh": "更新中…", "en": "Updating…"},
+    "up_to_date": {"zh": "已是最新版", "en": "Already up to date"},
+    "restarting": {"zh": "更新完成，重新啟動中", "en": "Update finished, restarting"},
+    "failed": {"zh": "更新失敗：{detail}", "en": "Update failed: {detail}"},
+    "pypi_unreachable": {"zh": "更新失敗：無法連線到 PyPI", "en": "Update failed: can't connect to PyPI"},
+}
+# 屬於失敗的代碼（App 依這個顯示錯誤樣式，不用比對文字）
+UPDATE_FAILED_CODES = frozenset({"failed", "pypi_unreachable"})
+
+
+def update_text(code: str | None, lang: str = "zh", **params) -> str | None:
+    """「更新 yt-dlp」結果的文字；``code`` 是 None 時回傳 None，不認得的代碼原樣回傳。"""
+    if code is None:
+        return None
+    entry = _UPDATE.get(code)
+    if entry is None:
+        return code
+    try:
+        return entry[normalize_lang(lang)].format(**params)
+    except (KeyError, IndexError, ValueError):
+        return entry[normalize_lang(lang)].split("{")[0].rstrip("：: ")
+
 
 def pp_label(name: str | None, lang: str = "zh") -> str:
     """yt-dlp 回報的後處理名稱有時沒有 FFmpeg 前綴（例如 VideoRemuxer），兩種都查；查不到就回傳原名。"""

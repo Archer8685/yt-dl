@@ -38,8 +38,6 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("native_settings.py", "中文（繁體）"): "回報問題表單的選項值",
     ("native_settings.py", "其他（請在下方說明）"): "回報問題表單的選項值",
     ("native_settings.py", "（Apple 晶片 / Apple silicon）"): "回報問題表單的選項值",
-    # 引擎的 /api/meta update_message 目前只有中文、也沒有成功／失敗代碼，只能比對前綴判斷（待引擎補代碼）
-    ("native_settings.py", "更新失敗"): "比對引擎訊息，不是顯示文字",
 }
 
 
