@@ -1,5 +1,16 @@
 # YT 下載器（YT Downloader）
 
+**English:** A free desktop app for Windows and macOS that downloads videos, music, subtitles and thumbnails from YouTube and 1,000+ other sites. yt-dlp and FFmpeg are built in and yt-dlp updates itself; the interface is available in English. **[User guide & FAQ (English)](USER_GUIDE.en.md)**
+
+| Your computer | Download | Requirements |
+| --- | --- | --- |
+| **Windows 10/11** | [⬇ YT-Downloader-Setup-Windows.exe](https://github.com/Archer8685/yt-dl/releases/latest/download/YT-Downloader-Setup-Windows.exe) | 64-bit (x64) PC |
+| **macOS (Apple silicon)** | [⬇ YT-Downloader-macOS-AppleSilicon.dmg](https://github.com/Archer8685/yt-dl/releases/latest/download/YT-Downloader-macOS-AppleSilicon.dmg) | M1 or later, macOS 14+ |
+
+Intel Macs are not supported. The app isn't code-signed, so Windows and macOS warn you the first time; this doesn't mean it has a virus. Follow the [Windows](USER_GUIDE.en.md#install-windows) or [macOS](USER_GUIDE.en.md#install-macos) steps to allow it. Only download content you have the right to use; see the [Disclaimer](DISCLAIMER.md).
+
+---
+
 下載 YouTube 與 1000+ 個網站的影片、音樂、字幕和縮圖的免費桌面 App（Windows／macOS）。內建 yt-dlp、FFmpeg，不用另外安裝任何東西；yt-dlp 會自動更新。
 
 > [!IMPORTANT]
@@ -49,7 +60,7 @@
 | `tools/ui_screenshot.py` | 以範例資料開啟 App 並截三個頁面（淺色／深色） |
 | `tests/` | pytest：引擎 API、介面元件（offscreen Qt）、啟動流程、Release 說明 |
 
-其他：`VERSION`（App 版本，發布觸發點）、`CHANGELOG.md`、`DISCLAIMER.md`、`USER_GUIDE.md`、`LICENSE`、`THIRD_PARTY_NOTICES.md`、`.github/ISSUE_TEMPLATE/`（回報問題／功能建議表單）、`assets/`（圖示）、`start.bat`／`start.sh`（只跑引擎＋網頁版）。
+其他：`VERSION`（App 版本，發布觸發點）、`CHANGELOG.md`、`DISCLAIMER.md`、`USER_GUIDE.md`／`USER_GUIDE.en.md`（使用說明中英文版）、`LICENSE`、`THIRD_PARTY_NOTICES.md`、`.github/ISSUE_TEMPLATE/`（回報問題／功能建議表單）、`assets/`（圖示）、`start.bat`／`start.sh`（只跑引擎＋網頁版）。
 
 ## 開發環境
 

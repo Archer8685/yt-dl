@@ -9,6 +9,8 @@ import build_app
 
 ROOT = Path(__file__).resolve().parent.parent
 GUIDE = (ROOT / "USER_GUIDE.md").read_text(encoding="utf-8")
+GUIDE_EN = (ROOT / "USER_GUIDE.en.md").read_text(encoding="utf-8")
+GUIDES = {"zh": GUIDE, "en": GUIDE_EN}
 
 # ROADMAP 附錄 A：engine_messages.py 的錯誤代碼會連到這些錨點，名稱不能改
 ERROR_ANCHORS = [
@@ -160,9 +162,32 @@ def test_third_party_notices_cover_bundled_components():
 
 # ---- 使用說明 ----
 
+def _anchors(text: str) -> list[str]:
+    return re.findall(r'<a id="([^"]+)"></a>', text)
+
+
+@pytest.mark.parametrize("lang", GUIDES)
 @pytest.mark.parametrize("anchor", ERROR_ANCHORS + PAGE_ANCHORS)
-def test_guide_has_fixed_anchor(anchor):
-    assert GUIDE.count(f'<a id="{anchor}"></a>') == 1
+def test_guide_has_fixed_anchor(anchor, lang):
+    assert GUIDES[lang].count(f'<a id="{anchor}"></a>') == 1
+
+
+def test_guide_versions_share_the_same_anchors():
+    """App 用同一個錨點開中文或英文使用說明，兩個版本的錨點和順序要一模一樣。"""
+    assert _anchors(GUIDE_EN) == _anchors(GUIDE)
+
+
+def test_engine_faq_anchors_exist_in_both_guides():
+    import engine_messages
+    for code in engine_messages.ERROR_CODES:
+        faq = engine_messages.error_payload(code, "en")["faq"]
+        for lang, text in GUIDES.items():
+            assert f'<a id="{faq}"></a>' in text, (lang, code)
+
+
+def test_guide_versions_link_to_each_other():
+    assert GUIDE.index("](USER_GUIDE.en.md)") < GUIDE.index("## 目錄")
+    assert GUIDE_EN.index("](USER_GUIDE.md)") < GUIDE_EN.index("## Contents")
 
 
 def _slug(heading: str) -> str:
@@ -170,28 +195,37 @@ def _slug(heading: str) -> str:
     return s.replace(" ", "-")
 
 
-def test_guide_internal_links_resolve():
-    ids = set(re.findall(r'<a id="([^"]+)"></a>', GUIDE))
-    ids |= {_slug(h) for h in re.findall(r"^#{1,6} (.+)$", GUIDE, re.MULTILINE)}
-    links = re.findall(r"\]\(#([^)]+)\)", GUIDE)
+@pytest.mark.parametrize("lang", GUIDES)
+def test_guide_internal_links_resolve(lang):
+    text = GUIDES[lang]
+    ids = set(_anchors(text))
+    ids |= {_slug(h) for h in re.findall(r"^#{1,6} (.+)$", text, re.MULTILINE)}
+    links = re.findall(r"\]\(#([^)]+)\)", text)
     assert links
     assert not [link for link in links if link not in ids]
 
 
-def test_guide_relative_file_links_exist():
-    for target in re.findall(r"\]\(((?!https?:|#)[^)#]+)", GUIDE):
+@pytest.mark.parametrize("lang", GUIDES)
+def test_guide_relative_file_links_exist(lang):
+    for target in re.findall(r"\]\(((?!https?:|#)[^)#]+)", GUIDES[lang]):
         assert (ROOT / target).is_file(), target
 
 
-def test_guide_bookmarklet_uses_shared_ytdl_format():
-    assert "javascript:location.href='ytdl://add?url='+encodeURIComponent(location.href)" in GUIDE
-    assert "不會自動開始下載" in GUIDE
+@pytest.mark.parametrize("lang, never_starts", [("zh", "不會自動開始下載"), ("en", "never starts downloading")])
+def test_guide_bookmarklet_uses_shared_ytdl_format(lang, never_starts):
+    text = GUIDES[lang]
+    assert "javascript:location.href='ytdl://add?url='+encodeURIComponent(location.href)" in text
+    assert never_starts in text
 
 
-def test_guide_does_not_promise_signing_or_suggest_proxy_for_geo_block():
-    assert "簽章計畫" not in GUIDE and "未來會簽章" not in GUIDE
-    geo = GUIDE[GUIDE.index('<a id="err-geo-blocked">'):GUIDE.index('<a id="err-bot-check">')]
-    assert "Proxy" not in geo and "VPN" not in geo and "代理" not in geo
+@pytest.mark.parametrize("lang", GUIDES)
+def test_guide_does_not_promise_signing_or_suggest_proxy_for_geo_block(lang):
+    text = GUIDES[lang]
+    for promise in ("簽章計畫", "未來會簽章", "will be signed", "signing plan"):
+        assert promise not in text
+    geo = text[text.index('<a id="err-geo-blocked">'):text.index('<a id="err-bot-check">')]
+    for hint in ("Proxy", "proxy", "VPN", "代理"):
+        assert hint not in geo
 
 
 def test_guide_unblock_steps_and_intel_notice():
@@ -202,6 +236,17 @@ def test_guide_unblock_steps_and_intel_notice():
     for step in ("先雙擊開啟一次", "隱私權與安全性", "仍要打開", "已損毀", "xattr", "macOS 15", "macOS 14"):
         assert step in mac, step
     assert "Intel Mac 不支援" in GUIDE
+
+
+def test_english_guide_unblock_steps_and_intel_notice():
+    win = GUIDE_EN[GUIDE_EN.index('<a id="install-windows">'):GUIDE_EN.index('<a id="install-macos">')]
+    for step in ("Keep", "More info", "Run anyway", "Restore", "Exclusions", "SHA256SUMS.txt"):
+        assert step in win, step
+    mac = GUIDE_EN[GUIDE_EN.index('<a id="install-macos">'):GUIDE_EN.index("### Update the app")]
+    for step in ("Double-click the app once first", "Privacy & Security", "Open Anyway", "damaged", "xattr",
+                 "macOS 15", "macOS 14"):
+        assert step in mac, step
+    assert "Intel Macs are not supported" in GUIDE_EN
 
 
 # ---- 網頁版、README、issue 範本 ----
@@ -220,6 +265,16 @@ def test_readme_starts_with_downloads():
     assert "releases/latest/download/YT-Downloader-Setup-Windows.exe" in readme
     assert "releases/latest/download/YT-Downloader-macOS-AppleSilicon.dmg" in readme
     assert "未附開源授權" not in readme and "(LICENSE)" in readme
+
+
+def test_readme_starts_with_english_intro_and_downloads():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    english = readme[:readme.index("## 下載")]
+    assert "**English:**" in english and "(USER_GUIDE.en.md)" in english
+    assert "USER_GUIDE.en.md#install-windows" in english and "USER_GUIDE.en.md#install-macos" in english
+    assert "releases/latest/download/YT-Downloader-Setup-Windows.exe" in english
+    assert "releases/latest/download/YT-Downloader-macOS-AppleSilicon.dmg" in english
+    assert "Intel Macs are not supported" in english
 
 
 def test_issue_templates_are_valid():
