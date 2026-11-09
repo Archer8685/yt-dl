@@ -113,14 +113,14 @@ Choose "Add Download" in the sidebar.
    - You can also drag a link onto the window, or send it from your browser with the [bookmarklet](#bookmarklet).
    - Analyzing a long playlist can take a while; click "Cancel" to stop.
 2. **Choose what to download**: once analyzed, the title, thumbnail and length are shown. Then choose:
-   - **Mode**: video + audio, video only, audio only, subtitles, thumbnail
+   - **Mode**: video + audio, video only, audio only, subtitles, cover (the thumbnail image)
    - **Quality**: best, 4K, 1440p, 1080p, 720p, 480p, 360p (if the video doesn't go that high, the best available is used)
    - **Video format**: MP4, MKV, WebM, MOV
    - **Audio format** (audio only): MP3, M4A, Opus, FLAC, WAV, original (no conversion), plus audio quality
 3. **Advanced options** (expandable): codec preference, FPS, HDR, multiple audio languages, subtitles (including auto-generated and translated ones), downloading only part of a video or splitting by chapter, removing sponsor segments with SponsorBlock, embedding metadata and cover art, file name template, cookies, proxy and speed limit. Advanced options remember your last settings.
 4. Click "Download". The download is added to the "Queue".
 
-**Playlists**: if the link contains a playlist, turn on "Download the whole playlist when the link contains one" and analyze. The videos in the playlist are listed. Tick the ones you want, filter with "Search title or uploader", or type a range (for example `1-10, 15`) and click "Apply range".
+**Playlists**: if the link contains a playlist, turn on "Download the whole playlist if the link has one" and analyze. The videos in the playlist are listed. Tick the ones you want, filter with "Search title or uploader", or type a range (for example `1-10, 15`) and click "Apply range".
 
 > Each time you open the app, "Add Download" starts from "Settings → Download defaults". Changing options on this page for one download doesn't change your defaults.
 
@@ -175,7 +175,7 @@ Choose "Queue" in the sidebar (the number next to it is how many downloads are i
 
 ## Keep running in the system tray and quit completely
 
-The app can keep downloading after you close its window: in "Settings → General", change "When closing the window" to "**Minimize to the system tray and keep downloading**" (the default is "Quit the app").
+The app can keep downloading after you close its window: in "Settings → General", change "When closing the window" to "**Minimize to tray, keep downloading**" (the default is "Quit the app").
 
 - **Where's the icon?** On Windows, in the system tray (notification area) at the bottom right of the taskbar (click "^" if you don't see it). On macOS, in the menu bar at the top of the screen.
 - **Hover over the icon** to see the current progress (for example "2 downloading · 45%"). Right-click the icon (on macOS, click it) for the menu: Show window, current progress, Pause all, Resume all, Quit.
@@ -190,10 +190,10 @@ Choose "Settings" in the sidebar (it shows a badge when a yt-dlp update or a new
 | Section | What you can do |
 | --- | --- |
 | General | Turn "Auto-paste video links from the clipboard" on or off; choose whether closing the window quits the app or [minimizes it to the system tray](#tray); set how many downloads run at the same time (1–5) |
-| Appearance | Theme: system / light / dark; text size: small / medium / large (scales the whole interface); language: system / 中文（繁體） / English (restart the app to apply) |
+| Appearance | Theme: Follow system / light / dark; text size: small / medium / large (scales the whole interface); language: Follow system / 中文（繁體） / English (restart the app to apply) |
 | Download defaults | The mode, quality, video format, audio format, audio quality and whole-playlist option used each time the app opens; changes apply immediately. "Reset all preferences…" restores appearance, download defaults and advanced options to how they were right after installing (it asks first; your storage location, cookies.txt and downloaded files are not affected) |
 | Storage location | Shows the download folder and free space; "Change…", "Open in Explorer (Finder)", "Use default folder" |
-| YouTube Premium | Uses your current cookies to check whether your account is signed in and has Premium, and shows when it was last checked; "Check again", "Update cookies.txt…" |
+| Cookies & YouTube Premium | Uses your current cookies to check whether your account is signed in and has Premium, and shows when it was last checked; "Check again", "Update cookies.txt…" |
 | Download components | Status of yt-dlp and FFmpeg; "Check for updates", then "Restart to apply" once a new version has downloaded |
 | About | App version (and a notice when a new version is available), a summary of the usage notice, user guide, report a problem, license (MIT) and third-party licenses |
 
@@ -302,7 +302,7 @@ You set a proxy in "Add Download → Advanced options → Network", but the app 
 <a id="err-cookie-browser"></a>
 
 **"Can't read the browser's cookies"**
-When you choose "Read cookies directly from the browser", Chrome and Edge lock their cookie file while they're open, and newer versions of Chrome and Edge on Windows also encrypt cookies so other programs can't read them. Use one of these instead:
+When you choose "Read from browser" as the cookie source, Chrome and Edge lock their cookie file while they're open, and newer versions of Chrome and Edge on Windows also encrypt cookies so other programs can't read them. Use one of these instead:
 
 1. Close Chrome/Edge completely (including any background process in the system tray) and try again.
 2. Choose Firefox instead (it can be read while it's open).
@@ -341,8 +341,8 @@ For age-restricted, members-only or private videos, or when YouTube asks for ver
 
 1. In your computer's browser, **sign in to your YouTube account first** and make sure the video plays.
 2. Install a browser extension that exports cookies (for example "Get cookies.txt LOCALLY"). On a youtube.com page, click the extension and export the cookies.txt for `youtube.com` (Netscape format).
-3. In the app, go to "Settings → YouTube Premium", click "Update cookies.txt…" and choose the file you exported. The app checks your account automatically, and turns on "Premium high bitrate" if it detects Premium.
-   - You can also switch to reading cookies directly from the browser in "Add Download → Advanced options → Network" (this often fails for Chrome and Edge on Windows; see [Can't read the browser's cookies](#err-cookie-browser)).
+3. In the app, go to "Settings → Cookies & YouTube Premium", click "Update cookies.txt…" and choose the file you exported. The app checks your account automatically, and turns on "Premium high bitrate" if it detects Premium.
+   - You can also set the cookie source to "Read from browser" in "Add Download → Advanced options → Network" (this often fails for Chrome and Edge on Windows; see [Can't read the browser's cookies](#err-cookie-browser)).
 4. When the cookies expire (the app says you're not signed in, or verification is requested again), export them again and click "Update cookies.txt…" once more.
 
 > [!WARNING]

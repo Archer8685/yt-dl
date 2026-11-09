@@ -110,6 +110,7 @@ DEFAULTS: dict[str, object] = {
 }
 SETTINGS_GROUP = "advanced"
 _UNSAVED = object()  # save_settings：還沒存過的值
+STACK_SEGMENTS = 5  # labeled_row：分段控制有這麼多個選項時放到標題下一行
 # reveal_section() 接受的名稱：分組本身的 key，加上給其他頁面用的別名
 SECTION_ALIASES = {"subtitles": "subs", "sponsorblock": "sponsor", "metadata": "files", "cookies": "network"}
 # 自己畫的元件（開關、標籤、箭頭、標題列滑過）用的顏色；AdvancedOptions.apply_theme() 會更新
@@ -682,6 +683,18 @@ def labeled_row(title: str, widget: QWidget) -> QWidget:
     if isinstance(widget, Segmented):
         for b in widget.buttons.values():
             b.setAccessibleDescription(title)
+        if len(widget.buttons) >= STACK_SEGMENTS:
+            # 選項多的分段控制放在標題下一行：和標題擠在同一行時，最小視窗（尤其英文）會超出右邊
+            w = QWidget()
+            w.setObjectName("row")
+            lay = QVBoxLayout(w)
+            lay.setContentsMargins(14, 8, 14, 10)
+            lay.setSpacing(6)
+            title_label = label(title)
+            title_label.setBuddy(widget)
+            lay.addWidget(title_label)
+            lay.addWidget(widget, 0, Qt.AlignLeft)
+            return w
     return form_row(title, widget)
 
 
@@ -721,12 +734,16 @@ def block_row(title: str, widget: QWidget, hint: str = "", extra: QWidget | None
     lay.setSpacing(6)
     head = QHBoxLayout()
     head.addWidget(label(title))
-    if hint:
-        head.addWidget(_hint(hint))
     head.addStretch()
     if extra is not None:
         head.addWidget(extra)
     lay.addLayout(head)
+    if hint:
+        # 說明放在標題下一行並自動換行（同 switch_row）：和標題同一行時，英文較長會把整頁撐寬
+        tip = _hint(hint, wrap=True)
+        lay.addWidget(tip)
+        lay.setSpacing(2)
+        lay.addSpacing(4)
     lay.addWidget(widget)
     return w
 

@@ -660,9 +660,36 @@ class Segmented(QFrame):
 
 
 class PopUp(QComboBox):
+    """下拉選單。
+
+    寬度跟著最長的選項，但最多約 MAX_CHARS 個英文字寬：選項變長（例如翻成英文）時不會把整頁撐寬，
+    超出的部分在選單關著時以「…」省略；打開的清單仍然夠寬、選項完整顯示。
+    """
+
+    MAX_CHARS = 30
+
     def __init__(self, items: list[tuple[object, str]] = ()):
         super().__init__()
         self.set_items(items)
+
+    def _cap(self) -> int:
+        # 30 個英文字＋箭頭與內距；字型大小（「文字大小」設定）改變時跟著變
+        return self.fontMetrics().horizontalAdvance("x" * self.MAX_CHARS) + 48
+
+    def sizeHint(self):
+        s = super().sizeHint()
+        s.setWidth(min(s.width(), self._cap()))
+        return s
+
+    def minimumSizeHint(self):
+        s = super().minimumSizeHint()
+        s.setWidth(min(s.width(), self._cap()))
+        return s
+
+    def showPopup(self):
+        view = self.view()
+        view.setMinimumWidth(view.sizeHintForColumn(0) + 2 * view.frameWidth() + 24)  # 長選項在清單裡完整顯示
+        super().showPopup()
 
     def set_items(self, items, prefer=None):
         """換選項；盡量保留原本選的值，沒有原本的值時改選 prefer，都沒有就選第一項。"""
