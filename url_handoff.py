@@ -14,9 +14,15 @@
   不會一直解碼下去。
 - 網址長度上限 2048 個字元；不接受空白、換行等控制字元，也不接受 `帳號:密碼@主機` 形式
   （`https://youtube.com@evil.example/` 這種看起來像 YouTube 的網址）。
+- `ytdl://` 來的網址不接受本機位址（localhost、127.0.0.0/8、::1、0.0.0.0，含 `127.1`、`2130706433`、
+  `0x7f.1`、`[::ffff:127.0.0.1]` 這類瀏覽器也認得的寫法）：App 收到後會自動解析，等於讓任何網頁
+  叫本機的引擎去連這台電腦上的服務。直接從命令列或拖放給的網址是使用者自己的動作，不受這條限制。
 """
 from __future__ import annotations
 
+import ipaddress
+import re
+import unicodedata
 from urllib.parse import unquote, urlsplit
 
 from PySide6.QtCore import QUrl
@@ -24,6 +30,9 @@ from PySide6.QtCore import QUrl
 MAX_URL_LENGTH = 2048
 SCHEME = "ytdl"
 _ALLOWED_SCHEMES = ("http", "https")
+_HEX = re.compile(r"0[xX]([0-9A-Fa-f]*)", re.ASCII)
+_OCT = re.compile(r"0[0-7]+", re.ASCII)
+_DEC = re.compile(r"[0-9]+", re.ASCII)
 _MAX_RAW_LENGTH = MAX_URL_LENGTH * 3 + 64  # 編碼過的 ytdl:// 參數最多約 3 倍長；再長一定超過上限，不必解析
 
 
@@ -82,7 +91,7 @@ def _from_ytdl(text: str) -> str | None:
         decoded = unquote(values[0], errors="strict")  # 只解碼一次；不把 + 當空白（encodeURIComponent 會把空白編成 %20）
     except UnicodeDecodeError:
         return None
-    return _validate(decoded)
+    return _validate(decoded, allow_loopback=False)
 
 
 def _query_pairs(query: str):
@@ -97,7 +106,61 @@ def _is_bad_char(c: str) -> bool:
     return c <= " " or c == "\x7f" or c in "  ﻿"
 
 
-def _validate(url: str) -> str | None:
+def _ipv4_number(part: str) -> int | None:
+    """WHATWG 網址規則的 IPv4 片段：十進位、0x 十六進位、0 開頭八進位。
+
+    先用正規表示式限定 ASCII 數字：int() 也吃「-1」「+5」「1_0」和全形以外的 Unicode 數字，
+    負數會讓 IPv4Address 丟例外。
+    """
+    if m := _HEX.fullmatch(part):
+        return int(m.group(1) or "0", 16)
+    if _OCT.fullmatch(part):
+        return int(part, 8)
+    if _DEC.fullmatch(part):
+        return int(part, 10)
+    return None
+
+
+def _parse_ipv4(host: str) -> ipaddress.IPv4Address | None:
+    """瀏覽器（WHATWG）認得的 IPv4 寫法：`127.0.0.1`、`127.1`、`2130706433`、`0x7f.0.0.1`、`0177.0.0.1`。"""
+    parts = host.split(".")
+    if parts and parts[-1] == "":  # 結尾的點：「127.0.0.1.」
+        parts = parts[:-1]
+    if not 1 <= len(parts) <= 4 or any(p == "" for p in parts):
+        return None
+    nums = [_ipv4_number(p) for p in parts]
+    if any(n is None for n in nums):
+        return None
+    *head, last = nums
+    if any(n > 255 for n in head) or last >= 256 ** (5 - len(nums)):
+        return None
+    value = last
+    for i, n in enumerate(head):
+        value += n << (8 * (3 - i))
+    return ipaddress.IPv4Address(value)
+
+
+def is_loopback_host(host: str) -> bool:
+    """主機是不是指向這台電腦（loopback 或 0.0.0.0／::）。host 是 urlsplit().hostname（小寫、沒有方括號）。"""
+    host = unicodedata.normalize("NFKC", unquote(host or "")).replace("。", ".").lower()
+    name = host.rstrip(".")
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
+    if ":" in host:
+        try:
+            addr = ipaddress.IPv6Address(host.split("%", 1)[0])  # 去掉 zone id（fe80::1%eth0）
+        except ValueError:
+            return False
+        mapped = addr.ipv4_mapped
+        if mapped is not None:
+            addr = mapped
+    else:
+        addr = _parse_ipv4(host)
+    return addr is not None and (addr.is_loopback or addr.is_unspecified)
+
+
+def _validate(url: str, allow_loopback: bool = True) -> str | None:
     if not url or len(url) > MAX_URL_LENGTH:
         return None
     if any(_is_bad_char(c) or c == "\\" for c in url):
@@ -112,5 +175,7 @@ def _validate(url: str) -> str | None:
     if not parts.hostname or "@" in parts.netloc:
         return None
     if port == 0:
+        return None
+    if not allow_loopback and is_loopback_host(parts.hostname):
         return None
     return url
