@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -92,6 +93,12 @@ def wait_port_free(server, timeout: float = 15) -> bool:
     return True
 
 
+def quiet_access_log():
+    """engine.log 不記每一次 API 存取：App 每 0.7 秒輪詢 /api/jobs，原本 80% 的紀錄都是這種，真正的錯誤反而被洗掉。
+    werkzeug 的警告與錯誤（例如連接埠被佔用）照樣會寫進去。"""
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
+
 def boot(argv: list[str] | None = None):
     """App 啟動的共用前置步驟，回傳 server 模組；--check-ytdlp 與 --server 不會回傳。"""
     argv = sys.argv if argv is None else argv
@@ -101,6 +108,7 @@ def boot(argv: list[str] | None = None):
     import server  # 匯入時會決定資料夾位置、把內建的 ffmpeg / deno 加進 PATH
     redirect_output(server.ROOT)
     wait_port_free(server)
+    quiet_access_log()
     if "--server" in argv:
         server.main()
         sys.exit(0)
@@ -117,6 +125,7 @@ def start_engine(server):
     if server._port_in_use(server.HOST, server.PORT):
         print(f"連接埠 {server.PORT} 已有程式在使用，介面改連到它", flush=True)
         return url, lambda: False
+    quiet_access_log()
     server.load_jobs()
     server.start_background_updates()
     threading.Thread(target=server.app.run, daemon=True, kwargs={

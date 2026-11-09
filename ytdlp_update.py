@@ -26,6 +26,8 @@ from pathlib import Path
 
 PYPI = "https://pypi.org/pypi/{name}/json"
 PYPI_VERSION = "https://pypi.org/pypi/{name}/{version}/json"
+# 查詢最新版本的逾時（秒）：網路被擋時不要讓背景檢查卡太久；下載 wheel 另用較長的逾時
+PYPI_TIMEOUT = 5
 PACKAGES = ("yt_dlp", "yt_dlp_ejs")
 
 
@@ -105,12 +107,12 @@ def _download_wheel(f: dict, get=_get) -> zipfile.ZipFile:
 
 def latest(channel: str = "stable", get=_get) -> tuple[str, dict]:
     """回傳 PyPI 上最新的 yt-dlp 版本與該版本的 metadata。nightly 頻道包含 pre-release。"""
-    data = json.loads(get(PYPI.format(name="yt-dlp"), 15))
+    data = json.loads(get(PYPI.format(name="yt-dlp"), PYPI_TIMEOUT))
     version = data["info"]["version"]
     if channel == "nightly":
         version = max([version, *data.get("releases", {})], key=vtuple)
         if version != data["info"]["version"]:
-            data = json.loads(get(PYPI_VERSION.format(name="yt-dlp", version=version), 15))
+            data = json.loads(get(PYPI_VERSION.format(name="yt-dlp", version=version), PYPI_TIMEOUT))
     return version, data
 
 

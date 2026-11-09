@@ -192,6 +192,31 @@ def test_installer_requires_accepting_disclaimer(tmp_path, monkeypatch):
         assert junk not in text
 
 
+def test_access_log_is_quiet_but_warnings_still_logged():
+    """engine.log 不再被 GET /api/jobs 洗版（werkzeug 的存取紀錄是 INFO），警告和錯誤照樣寫入。"""
+    import logging
+    log = logging.getLogger("werkzeug")
+    old = log.level
+    try:
+        log.setLevel(logging.NOTSET)
+        app_boot.quiet_access_log()
+        assert not log.isEnabledFor(logging.INFO)
+        assert log.isEnabledFor(logging.WARNING)
+    finally:
+        log.setLevel(old)
+
+
+def test_start_engine_quiets_access_log(monkeypatch):
+    calls = []
+    monkeypatch.setattr(app_boot, "quiet_access_log", lambda: calls.append(1))
+    fake = SimpleNamespace(HOST="127.0.0.1", PORT=1, _port_in_use=lambda h, p: False, load_jobs=lambda: None,
+                           start_background_updates=lambda: None, app=SimpleNamespace(run=lambda **kw: None),
+                           YTDLP_OVERLAY=None, yt_dlp=SimpleNamespace(version=SimpleNamespace(__version__="x")),
+                           _busy=lambda: False)
+    app_boot.start_engine(fake)
+    assert calls == [1]
+
+
 def test_bundled_app_version_follows_build_version(tmp_path, monkeypatch):
     import build_app
     monkeypatch.setattr(build_app, "BUILD", tmp_path)

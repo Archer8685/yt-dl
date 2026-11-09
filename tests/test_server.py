@@ -215,7 +215,7 @@ def test_resume_without_partial_moves_to_new_storage(client, tmp_path, monkeypat
     job.dir.mkdir(parents=True)
     server.JOBS[job.id] = job
     monkeypatch.setattr(server, "get_download_dir", lambda: new)
-    monkeypatch.setattr(server, "run_job", lambda j: None)
+    monkeypatch.setattr(server, "run_job", lambda j, token=None: None)
     try:
         assert client.post(f"/api/jobs/{job.id}/resume").status_code == 200
         assert job.dir == new / job.id
@@ -249,7 +249,7 @@ def test_streams_waiting_for_merge_count_as_partial_and_are_not_moved(client, tm
     assert job.partial_bytes() == 600
     server.JOBS[job.id] = job
     monkeypatch.setattr(server, "get_download_dir", lambda: new)  # 使用者換了儲存位置
-    monkeypatch.setattr(server, "run_job", lambda j: None)
+    monkeypatch.setattr(server, "run_job", lambda j, token=None: None)
     try:
         assert client.post(f"/api/jobs/{job.id}/resume").status_code == 200
         assert job.dir == old / "abc" and (tmp / "a.f401.mp4").exists(), "不能刪掉已下載的串流"
