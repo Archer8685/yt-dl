@@ -225,6 +225,7 @@ import fnmatch, re, sys
 DROP = {drop!r}
 KEEP_IMAGEFORMATS = {keep_imageformats!r}
 KEEP_PLATFORMS = {keep_platforms!r}
+KEEP_TRANSLATIONS = {keep_translations!r}
 TOOLS_DIR = {tools_dir!r}
 
 
@@ -242,7 +243,7 @@ def keep(dest, src=""):
     if "/plugins/platforms/" in p:
         return stem in KEEP_PLATFORMS
     if "/translations/" in p and p.endswith(".qm"):
-        return p.endswith("_zh_tw.qm")  # Qt 內建對話框的繁體中文
+        return stem in KEEP_TRANSLATIONS  # Qt 內建對話框與標準按鈕的繁體中文、英文
     return True
 
 
@@ -264,8 +265,29 @@ if sys.platform == "darwin":
                  info_plist={{"CFBundleDisplayName": {display!r}, "CFBundleShortVersionString": {version!r},
                               "CFBundleVersion": {version!r}, "NSHighResolutionCapable": True,
                               "NSRequiresAquaSystemAppearance": False,
-                              "NSLocalNetworkUsageDescription": {local_net!r}}})
+                              "NSLocalNetworkUsageDescription": {local_net!r},
+                              # ytdl://add?url=…：瀏覽器的書籤小工具把網址交給 App（App 只填入並解析，不會自動下載）
+                              "CFBundleURLTypes": [{{"CFBundleURLName": {bundle_id!r},
+                                                    "CFBundleURLSchemes": [{scheme!r}]}}]}})
 """
+URL_SCHEME = "ytdl"  # ytdl://add?url=<encodeURIComponent 後的 http/https 網址>（書籤小工具用）
+# Qt 內建的翻譯（標準按鈕、檔案對話框等）：只留介面支援的兩種語言。qt_<lang> 是會再載入 qtbase_<lang> 的總表
+KEEP_TRANSLATIONS = ["qtbase_zh_tw", "qtbase_en", "qt_zh_tw", "qt_en"]
+
+
+def doc_datas() -> list[tuple[str, str]]:
+    """授權與第三方授權說明：放在 App 資料夾最上層，安裝後也看得到。"""
+    return [(str(ROOT / name), ".") for name in ("LICENSE", "THIRD_PARTY_NOTICES.md")]
+
+
+def translation_datas() -> list[tuple[str, str]]:
+    """App 自己的翻譯檔 i18n/yt_dl_<語言>.qm → App 資料夾的 i18n/。
+
+    .qm 由 tools/i18n_update.py 編譯產生；還沒產生時就不加（PyInstaller 遇到找不到的檔案會直接失敗）。
+    """
+    return [(str(qm), "i18n") for qm in sorted((ROOT / "i18n").glob("*.qm"))]
+
+
 # macOS 15 起，程式碰到網路功能時系統可能詢問「允許尋找區域網路上的裝置」；這段文字會顯示在詢問視窗裡
 LOCAL_NET_REASON = "YT 下載器的視窗和背景的下載引擎在這台電腦上透過本機連線溝通，不會連到區域網路上的其他裝置。"
 
@@ -282,7 +304,8 @@ def pyinstaller():
                (str(ROOT / "assets" / "icon-128.png"), "assets"),
                (str(ROOT / "assets" / "chevron.png"), "assets"),  # Windows 彈出選單的箭頭
                (str(bundled_version_file()), "."),
-               (str(version_file()), ".")],  # App 版本（設定 → 關於）
+               (str(version_file()), ".")]  # App 版本（設定 → 關於）
+              + doc_datas() + translation_datas(),
         binaries=[(str(BIN / "*"), "bin")],  # FFmpeg / ffprobe / Deno
         tools_dir=str(BIN.resolve()).replace("\\", "/").lower() + "/",
         # 用不到卻很大的檔案：軟體 OpenGL（約 20 MB）、PDF 引擎（只有 qpdf 圖片外掛會用到）、
@@ -293,7 +316,8 @@ def pyinstaller():
               "pyside6/qt6opengl.dll"],
         keep_imageformats=["qjpeg", "qwebp", "qgif", "qico", "qsvg"],  # 縮圖是 JPEG / WebP；PNG 內建
         keep_platforms=["qwindows", "qcocoa", "qoffscreen"],  # qoffscreen：CI 沒有螢幕時的煙霧測試
-        local_net=LOCAL_NET_REASON,
+        keep_translations=KEEP_TRANSLATIONS,
+        local_net=LOCAL_NET_REASON, scheme=URL_SCHEME,
     ), encoding="utf-8")
     shutil.rmtree(DIST / NAME, ignore_errors=True)
     shutil.rmtree(DIST / f"{NAME}.app", ignore_errors=True)
@@ -302,7 +326,8 @@ def pyinstaller():
                    env={**os.environ, "PYTHONIOENCODING": "utf-8"})  # 子程序的輸出（含中文路徑）也用 UTF-8
 
 
-INNO_SCRIPT = r"""
+# 用 ''' 包起來：腳本裡有 Inno 的跳脫雙引號 """
+INNO_SCRIPT = r'''
 #define AppName "{display}"
 #define AppExe "{name}.exe"
 
@@ -334,15 +359,34 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
+; 依 Windows 的介面語言自動選精靈語言，不另外詢問：中文系統用繁體中文，其他語言用第一個（English）
+ShowLanguageDialog=no
+LanguageDetectionMethod=uilanguage
 
 [Languages]
+Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "zh"; MessagesFile: "{lang}"
+
+[CustomMessages]
+en.DeleteUserData=Also delete your settings and cookies?%n%nThis removes the download-folder setting, cookies.txt (your sign-in data), the auto-updated yt-dlp and the log file.%n%nDownloaded videos are NOT deleted.
+zh.DeleteUserData=是否一併刪除設定與 cookies？%n%n會刪除下載位置設定、cookies.txt（你的登入資料）、自動更新的 yt-dlp 和紀錄檔。%n%n下載的影片不會被刪除。
+
+[Registry]
+; ytdl:// 協定：瀏覽器的書籤小工具用 ytdl://add?url=… 把網址交給 App（App 只填入並解析，不會自動下載）。
+; HKA = 只裝給自己時寫在 HKCU，裝給所有使用者時寫在 HKLM；解除安裝時整個機碼刪掉
+Root: HKA; Subkey: "Software\Classes\{scheme}"; ValueType: string; ValueName: ""; ValueData: "URL:{{#AppName}}"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\{scheme}"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\{scheme}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{{app}}\{{#AppExe}}"",0"
+Root: HKA; Subkey: "Software\Classes\{scheme}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{{app}}\{{#AppExe}}"" ""%1"""
 
 [Tasks]
 Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; GroupDescription: "{{cm:AdditionalIcons}}"
 
 [Files]
 Source: "{src}\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 授權與第三方授權說明：App 裡也有一份（_internal），這裡另外放在安裝資料夾最上層，使用者找得到
+Source: "{root}\LICENSE"; DestDir: "{{app}}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "{root}\THIRD_PARTY_NOTICES.md"; DestDir: "{{app}}"; Flags: ignoreversion
 
 [Icons]
 Name: "{{autoprograms}}\{{#AppName}}"; Filename: "{{app}}\{{#AppExe}}"
@@ -353,7 +397,21 @@ Filename: "{{app}}\{{#AppExe}}"; Description: "{{cm:LaunchProgram,{{#AppName}}}}
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{{app}}"
-"""
+
+[Code]
+// 解除安裝後詢問要不要一併刪除使用者資料（預設「否」；靜默解除安裝時一律保留）。
+// 資料夾和機碼要和 server.py 的 _user_data_dir()、native_app 的 QSettings("YTDownloader", "NativeApp") 一致。
+// 下載的影片放在使用者自己選的資料夾，這裡不會碰。
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
+    if MsgBox(CustomMessage('DeleteUserData'), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+    begin
+      DelTree(ExpandConstant('{{localappdata}}\{name}'), True, True, True);
+      RegDeleteKeyIncludingSubkeys(HKCU, 'Software\YTDownloader');
+    end;
+end;
+'''
 
 
 def windows_installer() -> Path | None:
@@ -368,7 +426,7 @@ def windows_installer() -> Path | None:
     # Inno Setup 需要 UTF-8 BOM 才會把中文當 UTF-8 讀
     iss.write_text(INNO_SCRIPT.format(display=DISPLAY, name=NAME, version=VERSION, dist=DIST,
                                       icon=ROOT / "assets" / "icon.ico", lang=lang, src=DIST / NAME,
-                                      license=license_file()),
+                                      license=license_file(), scheme=URL_SCHEME, root=ROOT),
                    encoding="utf-8-sig")
     subprocess.run([iscc, "/Q", str(iss)], check=True)
     return DIST / f"{NAME}-Setup-Windows.exe"

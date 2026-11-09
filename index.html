@@ -367,13 +367,17 @@ footer{margin-top:60px;text-align:center;color:var(--dim);font-size:12px;line-he
           <a class="btn" href="https://github.com/Archer8685/yt-dl/releases/latest/download/YT-Downloader-macOS-AppleSilicon.dmg">macOS（Apple 晶片）</a>
         </div>
         <p class="desc" style="margin:10px 0 0">
-          <b>Windows</b>：執行安裝精靈，之後從「開始」功能表開啟「YT 下載器」。若出現「Windows 已保護您的電腦」，按「其他資訊」→「仍要執行」。<br>
-          <b>macOS</b>：打開 .dmg，把「YT 下載器」拖進「應用程式」。第一次被擋下時，到「系統設定 → 隱私權與安全性」按「仍要打開」；若顯示「已損毀」，在「終端機」執行一次 <span class="mono">xattr -dr com.apple.quarantine "/Applications/YT 下載器.app"</span>。<br>
+          App 沒有付費的數位簽章，第一次下載、開啟時系統會跳出警告，這不代表有病毒，照下面步驟放行即可。<br>
+          <b>Windows 10／11</b>：瀏覽器說「通常不會下載此檔案」時按「保留」。執行安裝精靈，出現「Windows 已保護您的電腦」時按「其他資訊」→「仍要執行」，之後從「開始」功能表開啟「YT 下載器」。防毒軟體隔離了檔案時，請到隔離區還原並加入例外。
+          <a href="https://github.com/Archer8685/yt-dl/blob/main/USER_GUIDE.md#install-windows" target="_blank" rel="noopener">詳細步驟</a><br>
+          <b>macOS（Apple 晶片，macOS 14 以上）</b>：打開 .dmg，把「YT 下載器」拖進「應用程式」。① 先雙擊開啟一次（會被擋下）② 到「系統設定 → 隱私權與安全性」，在最下方按「仍要打開」③ 只有顯示「已損毀」時，才在「終端機」執行一次 <span class="mono">xattr -dr com.apple.quarantine "/Applications/YT 下載器.app"</span>。
+          <a href="https://github.com/Archer8685/yt-dl/blob/main/USER_GUIDE.md#install-macos" target="_blank" rel="noopener">詳細步驟</a><br>
+          <b>Intel Mac 不支援</b>（點左上角  →「關於這台 Mac」，「晶片」寫 Apple M 開頭才能使用）。<br>
           檔案預設存在「下載」資料夾裡的 YT-Downloads。
           <a href="https://github.com/Archer8685/yt-dl/releases/latest" target="_blank" rel="noopener">所有版本與說明</a>
         </p>
         <details style="margin-top:10px">
-          <summary class="desc" style="cursor:pointer">進階：用 Python 原始碼執行（Linux、Intel Mac）</summary>
+          <summary class="desc" style="cursor:pointer">進階：用 Python 原始碼執行（Linux 等，開發者用）</summary>
           <pre class="log" style="margin:8px 0 0;max-height:none">git clone https://github.com/Archer8685/yt-dl.git
 cd yt-dl
 start.bat        # Windows
@@ -736,7 +740,8 @@ start.bat        # Windows
 
   <footer>
     Powered by <a href="https://github.com/yt-dlp/yt-dlp" target="_blank" rel="noopener">yt-dlp</a> &amp; <a href="https://ffmpeg.org" target="_blank" rel="noopener">FFmpeg</a> · 下載完成的檔案可直接在上方「下載佇列」取得<br>
-    請僅下載你有權使用的內容，並遵守各平台服務條款與著作權法。本工具不提供任何影音內容，與 YouTube／Google 無關 · <a href="https://github.com/Archer8685/yt-dl/blob/main/DISCLAIMER.md" target="_blank" rel="noopener">免責聲明</a>
+    請僅下載你有權使用的內容，並遵守各平台服務條款與著作權法。本工具不提供任何影音內容，與 YouTube／Google 無關<br>
+    <a href="https://github.com/Archer8685/yt-dl/blob/main/USER_GUIDE.md" target="_blank" rel="noopener">使用說明</a> · <a href="https://github.com/Archer8685/yt-dl/issues/new/choose" target="_blank" rel="noopener">回報問題</a> · <a href="https://github.com/Archer8685/yt-dl/blob/main/DISCLAIMER.md" target="_blank" rel="noopener">免責聲明</a> · <a href="https://github.com/Archer8685/yt-dl/blob/main/LICENSE" target="_blank" rel="noopener">MIT 授權</a>
   </footer>
 </div>
 
