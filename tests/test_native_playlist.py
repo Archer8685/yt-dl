@@ -81,14 +81,27 @@ def test_parse_range_formats():
 @pytest.mark.parametrize("text, msg", [
     ("", "請輸入範圍"),
     ("abc", "看不懂「abc」"),
-    ("1-", "看不懂"),
+    ("1-2-3", "看不懂"),
     ("10-5", "起點比終點大"),
     ("45-60", "超出範圍"),
     ("0", "超出範圍"),
+    ("60-", "超出範圍"),  # 起點已經超出清單，不是「起點比終點大」
 ])
 def test_parse_range_errors(text, msg):
     with pytest.raises(ValueError, match=msg):
         parse_range(text, range(1, 51))
+
+
+@pytest.mark.parametrize("text", ["", "abc", "10-5", "45-60"])
+def test_parse_range_errors_include_example(text):
+    """DL14：格式錯誤時附上正確寫法的例子。"""
+    with pytest.raises(ValueError, match="例如：1-10, 15, 20-"):
+        parse_range(text, range(1, 51))
+
+
+def test_parse_range_open_ended():
+    assert parse_range("45-", range(1, 51)) == set(range(45, 51))
+    assert parse_range("1-3, 48 -", range(1, 51)) == {1, 2, 3, 48, 49, 50}
 
 
 def test_parse_range_skips_missing_entries():
@@ -287,3 +300,72 @@ def test_empty_playlist(qapp):
     assert v.empty.isVisibleTo(v)
     v.range.setText("1")
     assert v.apply_range() is False and "沒有影片" in v.error.text()
+    assert not v.none_box.isVisibleTo(v)  # 空清單沒有東西可以全選，不顯示「全選整個清單」
+
+
+# --------------------------------------------------------------------------- v1.3：一部都沒選、無障礙、字型
+
+def test_none_selected_offers_select_all(view):
+    """DL2／DL14：一部都沒選時顯示提示和「全選整個清單」，點了就全選（不受搜尋影響）。"""
+    assert not view.none_box.isVisibleTo(view)
+    view.select_none()
+    assert view.selected_count() == 0 and view.none_box.isVisibleTo(view)
+    view.search.setText("Live")  # 有搜尋時「全選」只選搜尋結果，但修正連結要選整個清單
+    view.none_fix.click()
+    assert view.selected_count() == 50 and view.playlist_items() == "1-50"
+    assert not view.none_box.isVisibleTo(view)
+
+
+def test_select_all_entries_clears_range_error(view):
+    view.range.setText("abc")
+    assert view.apply_range() is False and view.error.isVisibleTo(view)
+    view.select_none()
+    view.select_all_entries()
+    assert view.selected_count() == 50 and not view.error.isVisibleTo(view)
+
+
+def test_accessible_names(view):
+    from PySide6.QtCore import Qt
+    for w in (view.search, view.range, view.list):
+        assert w.accessibleName(), w
+    text = view.proxy.index(0, 0).data(Qt.AccessibleTextRole)
+    assert "Studio 歌曲 1" in text and "測試頻道" in text and text.startswith("第 1 部")
+    assert view.proxy.index(0, 0).data(Qt.CheckStateRole) == Qt.Checked
+
+
+def test_row_height_follows_font(qapp):
+    from PySide6.QtGui import QFont
+
+    from native_playlist import ROW_H, row_height
+    small, big = QFont(), QFont()
+    small.setPixelSize(13)
+    big.setPixelSize(30)
+    assert row_height(small) == ROW_H
+    assert row_height(big) > ROW_H  # 大字時兩行字放得下，不會被切掉
+
+
+def test_list_min_height_follows_font_change(view):
+    from PySide6.QtGui import QFont
+
+    from native_playlist import row_height
+    before = view.list.minimumHeight()
+    big = QFont()
+    big.setPixelSize(30)
+    view.setFont(big)
+    assert view.list.minimumHeight() == row_height(view.list.font()) * 5 + 12 > before
+
+
+def test_keyboard_focus_draws_ring_and_space_toggles(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    v = PlaylistView(image_loader=FakeLoader())
+    v.set_playlist(fake_info(5))
+    v.resize(720, 560)
+    v.show()
+    v.list.setFocus()
+    v.list.setCurrentIndex(v.proxy.index(1, 0))
+    qapp.processEvents()
+    v.grab()  # 畫出焦點環不出錯
+    QTest.keyClick(v.list, Qt.Key_Space)
+    assert v.playlist_items() == "1,3-5"
+    v.close()

@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterable
 
 from PySide6.QtCore import (
     QAbstractListModel,
+    QCoreApplication,
     QEvent,
     QModelIndex,
     QPointF,
@@ -43,14 +44,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from native_app import Api, fmt_duration, label, rounded, tokens
+from native_common import Api, fmt_duration, label, rounded, tokens
+
+_tr = QCoreApplication.translate  # 名稱固定是 _tr（tools/i18n_update.py 只認得這個）
 
 ImageLoader = Callable[[str, Callable[[QPixmap], None]], None]
 
 ENTRY_ROLE = Qt.UserRole + 1
 SEARCH_ROLE = Qt.UserRole + 2
 
-ROW_H = 56
+ROW_H = 56  # 最小列高；字型較大時依字高增加（row_height()）
 THUMB_W, THUMB_H, THUMB_R = 80, 45, 6
 PAD, CHECK = 12, 20  # 列左右內距、勾選圈直徑
 MAX_INFLIGHT = 6
@@ -78,31 +81,35 @@ _DASH = r"[-–—~～:：]"
 
 
 def parse_range(text: str, valid: Iterable[int]) -> set[int]:
-    """「1-10, 15」→ {1..10, 15}。看不懂或超出清單範圍時丟 ValueError（訊息可直接給使用者看）。"""
+    """「1-10, 15, 20-」→ {1..10, 15, 20..最後}。看不懂或超出清單範圍時丟 ValueError。
+
+    錯誤訊息可直接給使用者看，而且都附上正確寫法的例子（DL14）。
+    """
     valid = set(valid)
     if not valid:
-        raise ValueError("這個播放清單沒有影片")
+        raise ValueError(_tr("native_playlist", "這個播放清單沒有影片"))
     text = (text or "").strip()
     if not text:
-        raise ValueError("請輸入範圍，例如 1-10, 15")
+        raise ValueError(_tr("native_playlist", "請輸入範圍，例如：1-10, 15, 20-"))
     text = re.sub(rf"\s*{_DASH}\s*", "-", text)
     picked: set[int] = set()
     top = max(valid)
     for tok in re.split(r"[,，、;；\s]+", text):
         if not tok:
             continue
-        m = re.fullmatch(r"(\d+)(?:-(\d+))?", tok)
+        m = re.fullmatch(r"(\d+)(?:-(\d*))?", tok)  # 「20-」＝第 20 部到最後
         if not m:
-            raise ValueError(f"看不懂「{tok}」，請用像 1-10, 15 這樣的格式")
+            raise ValueError(_tr("native_playlist", "看不懂「{part}」。例如：1-10, 15, 20-").format(part=tok))
         a = int(m.group(1))
-        b = int(m.group(2)) if m.group(2) else a
+        b = a if m.group(2) is None else (int(m.group(2)) if m.group(2) else top)
+        if a < 1 or a > top or b > top:  # 先檢查範圍：「20-」在只有 10 部的清單是超出範圍，不是起點比終點大
+            raise ValueError(_tr("native_playlist", "「{part}」超出範圍，這個清單只有 1–{last}。例如：1-10, 15, 20-")
+                             .format(part=tok, last=top))
         if a > b:
-            raise ValueError(f"「{tok}」的起點比終點大")
-        if a < 1 or b > top:
-            raise ValueError(f"「{tok}」超出範圍，這個清單只有 1–{top}")
+            raise ValueError(_tr("native_playlist", "「{part}」的起點比終點大。例如：1-10, 15, 20-").format(part=tok))
         picked.update(n for n in range(a, b + 1) if n in valid)
     if not picked:
-        raise ValueError("這個範圍裡沒有影片")
+        raise ValueError(_tr("native_playlist", "這個範圍裡沒有影片"))
     return picked
 
 
@@ -145,7 +152,22 @@ class PlaylistModel(QAbstractListModel):
             return f"{e.get('title') or ''}\n{e.get('uploader') or ''}"
         if role == Qt.ToolTipRole:
             return e.get("title") or ""
+        if role == Qt.AccessibleTextRole:  # 朗讀程式念的內容；勾選狀態由 CheckStateRole 回報
+            return self.accessible_text(e)
         return None
+
+    @staticmethod
+    def accessible_text(e: dict) -> str:
+        title = e.get("title") or _tr("PlaylistModel", "（沒有標題）")
+        dur = fmt_duration(e.get("duration"))
+        uploader = e.get("uploader") or ""
+        if uploader and dur:
+            return _tr("PlaylistModel", "第 {index} 部：{title}，{uploader}，{duration}").format(
+                index=e.get("index", ""), title=title, uploader=uploader, duration=dur)
+        if uploader or dur:
+            return _tr("PlaylistModel", "第 {index} 部：{title}，{detail}").format(
+                index=e.get("index", ""), title=title, detail=uploader or dur)
+        return _tr("PlaylistModel", "第 {index} 部：{title}").format(index=e.get("index", ""), title=title)
 
     def setData(self, index, value, role=Qt.EditRole):
         if role != Qt.CheckStateRole or not index.isValid():
@@ -217,6 +239,12 @@ def _theme() -> dict[str, QColor]:
     return _THEME
 
 
+def row_height(font: QFont) -> int:
+    """一列的高度：至少 ROW_H，字型大時要放得下標題＋上傳者兩行（依 fontMetrics 計算）。"""
+    two_lines = QFontMetrics(font).height() + QFontMetrics(_scaled(font, 0.9)).height() + 2
+    return max(ROW_H, two_lines + 16)
+
+
 class PlaylistDelegate(QStyledItemDelegate):
     def __init__(self, owner: PlaylistView):
         super().__init__(owner)
@@ -225,7 +253,7 @@ class PlaylistDelegate(QStyledItemDelegate):
         self._pressed: int | None = None  # 按下時的列，放開在同一列才算點擊
 
     def sizeHint(self, option, index):
-        return QSize(option.rect.width(), ROW_H)
+        return QSize(option.rect.width(), row_height(option.font))
 
     @staticmethod
     def check_rect(r: QRect) -> QRect:
@@ -246,6 +274,13 @@ class PlaylistDelegate(QStyledItemDelegate):
             path = QPainterPath()
             path.addRoundedRect(bg, 8, 8)
             p.fillPath(path, QColor(t["select"] if option.state & QStyle.State_Selected else t["hover"]))
+        if option.state & QStyle.State_HasFocus and self.owner.list.hasFocus():
+            # 鍵盤焦點所在的列：和進階選項的自繪元件一樣，2 px 強調色焦點環
+            ring = QPainterPath()
+            ring.addRoundedRect(QRectF(r.adjusted(5, 2, -5, -2)), 7, 7)
+            p.setPen(QPen(QColor(t["accent"]), 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(ring)
 
         # 勾選圈（照片 App 那種）
         cr = QRectF(self.check_rect(r)).adjusted(0.5, 0.5, -0.5, -0.5)
@@ -310,7 +345,7 @@ class PlaylistDelegate(QStyledItemDelegate):
         p.setFont(title_f)
         p.setPen(QColor(t["text"] if on else t["secondary"]))
         p.drawText(QRect(x, y, text_w, fm.height()), Qt.AlignVCenter | Qt.AlignLeft,
-                   fm.elidedText(e.get("title") or "（沒有標題）", Qt.ElideRight, text_w))
+                   fm.elidedText(e.get("title") or _tr("PlaylistModel", "（沒有標題）"), Qt.ElideRight, text_w))
         if sub:
             p.setFont(small)
             p.setPen(QColor(t["secondary"]))
@@ -404,19 +439,22 @@ class PlaylistView(QWidget):
         bar = QHBoxLayout()
         bar.setSpacing(8)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("搜尋標題或上傳者")
+        self.search.setPlaceholderText(self.tr("搜尋標題或上傳者"))
+        self.search.setAccessibleName(self.tr("搜尋播放清單"))
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._search_changed)
         self._search_timer = QTimer(self)  # 很長的清單：打字停一下才篩選，不要每個字都卡一下
         self._search_timer.setSingleShot(True)
         self._search_timer.timeout.connect(lambda: self._on_search(self.search.text()))
         self.range = QLineEdit()
-        self.range.setPlaceholderText("範圍，例如 1-10, 15")
+        self.range.setPlaceholderText(self.tr("範圍，例如 1-10, 15, 20-"))
+        self.range.setAccessibleName(self.tr("要下載的序號範圍"))
         self.range.setClearButtonEnabled(True)
-        self.range.setMinimumWidth(190)
+        # 放得下提示文字（英文較長）
+        self.range.setMinimumWidth(max(190, self.range.fontMetrics().horizontalAdvance(self.range.placeholderText()) + 40))
         self.range.returnPressed.connect(self.apply_range)
         self.range.textEdited.connect(lambda _: self._set_error(""))
-        self.range_btn = QPushButton("套用範圍")
+        self.range_btn = QPushButton(self.tr("套用範圍"))
         self.range_btn.setCursor(Qt.PointingHandCursor)
         self.range_btn.clicked.connect(self.apply_range)
         bar.addWidget(self.search, 3)
@@ -433,10 +471,22 @@ class PlaylistView(QWidget):
         self.count = label("", "subtitle")
         acts.addWidget(self.count, 1)
         self.btn_all, self.btn_none, self.btn_invert = (self._link(t, f) for t, f in (
-            ("全選", self.select_all), ("全不選", self.select_none), ("反選", self.invert)))
+            (self.tr("全選"), self.select_all), (self.tr("全不選"), self.select_none), (self.tr("反選"), self.invert)))
         for b in (self.btn_all, self.btn_none, self.btn_invert):
             acts.addWidget(b)
         lay.addLayout(acts)
+
+        # 一部都沒選：直接給「全選整個清單」的連結修正（DL2／DL14）
+        self.none_box = QWidget()
+        nl = QHBoxLayout(self.none_box)
+        nl.setContentsMargins(0, 0, 0, 0)
+        nl.setSpacing(4)
+        self.none_text = label(self.tr("還沒有選任何影片，至少要選一部才能下載。"), "errorText", wrap=True)
+        self.none_fix = self._link(self.tr("全選整個清單"), self.select_all_entries)
+        nl.addWidget(self.none_text, 1)
+        nl.addWidget(self.none_fix)
+        self.none_box.hide()
+        lay.addWidget(self.none_box)
 
         # 清單
         self.card = QFrame()
@@ -460,10 +510,11 @@ class PlaylistView(QWidget):
         self.list.setPalette(pal)
         self.list.setAttribute(Qt.WA_MacShowFocusRect, False)
         self.list.viewport().setAutoFillBackground(False)
-        self.list.setMinimumHeight(ROW_H * 5 + 12)
+        self.list.setAccessibleName(self.tr("播放清單影片"))
+        self.list.setAccessibleDescription(self.tr("空白鍵勾選或取消目前的影片，Shift 點選可一次選一段"))
         self.empty = label("", "subtitle")
         self.empty.setAlignment(Qt.AlignCenter)
-        self.empty.setMinimumHeight(ROW_H * 2)
+        self._fit_rows()
         self.empty.hide()
         cl.addWidget(self.list)
         cl.addWidget(self.empty)
@@ -491,13 +542,13 @@ class PlaylistView(QWidget):
         self.range.clear()
         self._set_error("")
         self.model.reset(list(self.info.get("entries") or []))
-        self.title.setText(self.info.get("title") or "播放清單")
+        self.title.setText(self.info.get("title") or self.tr("播放清單"))
         n = len(self.model.entries)
         self.max_index = max((e["index"] for e in self.model.entries if isinstance(e.get("index"), int)), default=n)
-        bits =[self.info.get("uploader") or "", f"共 {n} 部"]
+        bits = [self.info.get("uploader") or "", _tr("PlaylistView", "共 %n 部", None, n)]
         total = self._total(range(n))
         if total:
-            bits.append(f"總長 {total}")
+            bits.append(self.tr("總長 {duration}").format(duration=total))
         self.meta.setText(" · ".join(b for b in bits if b))
         self.list.scrollToTop()
         self._update_empty()
@@ -516,6 +567,11 @@ class PlaylistView(QWidget):
     def select_all(self):
         """勾選目前看得到的列（有搜尋時只套用到搜尋結果）。"""
         self.model.set_rows(self._visible_rows(), True)
+
+    def select_all_entries(self):
+        """勾選整個清單（不管目前的搜尋）。給「一部都沒選」的修正連結，以及下載頁摘要的錯誤連結用。"""
+        self.model.set_rows(range(len(self.model.entries)), True)
+        self._set_error("")
 
     def select_none(self):
         self.model.set_rows(self._visible_rows(), False)
@@ -570,18 +626,21 @@ class PlaylistView(QWidget):
         if not known:
             return ""
         approx = any(not (isinstance(s, int | float) and s > 0) for s in secs)
-        return ("約 " if approx else "") + fmt_duration(known)
+        if approx:
+            return self.tr("約 {duration}").format(duration=fmt_duration(known))
+        return fmt_duration(known)
 
     def _on_checks(self, *_):
         n = self.selected_count()
         total_n = len(self.model.entries)
-        text = f"已選 {n} / {total_n} 部"
+        bits = [_tr("PlaylistView", "已選 %n / {total} 部", None, n).format(total=total_n)]
         dur = self._total([r for r, on in enumerate(self.model.checked) if on])
         if n and dur:
-            text += f" · {dur}"
+            bits.append(dur)
         if self.proxy.filterRegularExpression().pattern():
-            text += f" · 顯示 {self.proxy.rowCount()} 部符合"
-        self.count.setText(text)
+            bits.append(_tr("PlaylistView", "顯示 %n 部符合", None, self.proxy.rowCount()))
+        self.count.setText(" · ".join(bits))
+        self.none_box.setVisible(n == 0 and total_n > 0)
         self.selectionChanged.emit(n)
 
     def _search_changed(self, text: str):
@@ -594,7 +653,7 @@ class PlaylistView(QWidget):
         self.proxy.setFilterFixedString(text.strip())
         self._update_empty()
         self._on_checks()
-        hint = "只套用到搜尋結果" if text.strip() else ""
+        hint = self.tr("只套用到搜尋結果") if text.strip() else ""
         for b in (self.btn_all, self.btn_none, self.btn_invert):
             b.setToolTip(hint)
         self._schedule_pump()
@@ -602,7 +661,7 @@ class PlaylistView(QWidget):
     def _update_empty(self):
         none = self.proxy.rowCount() == 0
         q = self.search.text().strip()
-        self.empty.setText(f"沒有符合「{q}」的影片" if q else "這個播放清單沒有影片")
+        self.empty.setText(self.tr("沒有符合「{query}」的影片").format(query=q) if q else self.tr("這個播放清單沒有影片"))
         self.empty.setVisible(none)
         self.list.setVisible(not none)
 
@@ -678,9 +737,18 @@ class PlaylistView(QWidget):
     def _retheme(self):
         self.list.viewport().update()
 
+    def _fit_rows(self):
+        """清單至少顯示 5 列、空白狀態 2 列高；列高依目前字型（文字大小設定改變時重算）。"""
+        rh = row_height(self.list.font())
+        self.list.setMinimumHeight(rh * 5 + 12)
+        self.empty.setMinimumHeight(rh * 2)
+
     def changeEvent(self, e):
         if e.type() in (QEvent.PaletteChange, QEvent.StyleChange, QEvent.ApplicationPaletteChange):
             self._retheme()
+        if e.type() in (QEvent.FontChange, QEvent.StyleChange, QEvent.ApplicationFontChange) and hasattr(self, "empty"):
+            self._fit_rows()
+            self.list.doItemsLayout()  # uniformItemSizes 會快取列高，字型變了要重新排
         super().changeEvent(e)
 
 
