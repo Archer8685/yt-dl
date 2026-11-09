@@ -1,2 +1,4 @@
 yt-dlp[default]
 flask>=3.0
+# 「連同檔案刪除」移到資源回收筒（純 Python，PyInstaller 會自動收進去）
+send2trash>=1.8
