@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import copy
 import html
+import inspect
 import re
 from pathlib import Path
 
 from PySide6.QtCore import (
+    QT_TRANSLATE_NOOP,
+    QCoreApplication,
     QEasingCurve,
     QPoint,
     QPointF,
@@ -32,7 +35,7 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QColor, QGuiApplication, QIntValidator, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QIntValidator, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QFileDialog,
@@ -49,27 +52,45 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from native_app import Card, PopUp, Segmented, form_row, hairline, label, tokens
+from native_common import Card, PopUp, Segmented, form_row, hairline, label, tokens
+
+_tr = QCoreApplication.translate  # 名稱固定是 _tr（tools/i18n_update.py 只認得這個）
+_CTX = "native_options"  # 模組層級字串（選項清單）的翻譯 context，見 docs/I18N.md 2.6
 
 # --------------------------------------------------------------------------- #
-#  選項清單（值與 server.py 的允許值一致）
+#  選項清單（值與 server.py 的允許值一致）。中文標籤用 QT_TRANSLATE_NOOP 標記，顯示時才翻譯（_items）
 # --------------------------------------------------------------------------- #
-VCODECS = [("", "自動"), ("av01", "AV1"), ("vp9", "VP9"), ("h264", "H.264"), ("h265", "H.265")]
-FPS_LIMITS = [("", "不限"), ("60", "≤ 60 fps"), ("30", "≤ 30 fps"), ("25", "≤ 25 fps")]
-HDR = [("", "自動"), ("hdr", "偏好 HDR"), ("sdr", "僅 SDR")]
-ACODEC_PREFER = [("", "自動"), ("opus", "Opus"), ("aac", "AAC")]
-SUB_FORMATS = [("best", "原始"), ("srt", "SRT"), ("vtt", "VTT"), ("ass", "ASS"), ("lrc", "LRC")]
+VCODECS = [("", QT_TRANSLATE_NOOP("native_options", "自動")), ("av01", "AV1"), ("vp9", "VP9"),
+           ("h264", "H.264"), ("h265", "H.265")]
+FPS_LIMITS = [("", QT_TRANSLATE_NOOP("native_options", "不限")), ("60", "≤ 60 fps"), ("30", "≤ 30 fps"),
+              ("25", "≤ 25 fps")]
+HDR = [("", QT_TRANSLATE_NOOP("native_options", "自動")), ("hdr", QT_TRANSLATE_NOOP("native_options", "偏好 HDR")),
+       ("sdr", QT_TRANSLATE_NOOP("native_options", "僅 SDR"))]
+ACODEC_PREFER = [("", QT_TRANSLATE_NOOP("native_options", "自動")), ("opus", "Opus"), ("aac", "AAC")]
+SUB_FORMATS = [("best", QT_TRANSLATE_NOOP("native_options", "原始")), ("srt", "SRT"), ("vtt", "VTT"),
+               ("ass", "ASS"), ("lrc", "LRC")]
 THUMB_FORMATS = [("jpg", "JPG"), ("png", "PNG"), ("webp", "WebP")]
-SPONSOR = [("sponsor", "贊助"), ("intro", "片頭"), ("outro", "片尾"), ("selfpromo", "自我宣傳"),
-           ("preview", "預告/回顧"), ("filler", "離題閒聊"), ("interaction", "訂閱提醒"),
-           ("music_offtopic", "非音樂片段"), ("poi_highlight", "精華"), ("chapter", "章節")]
+SPONSOR = [("sponsor", QT_TRANSLATE_NOOP("native_options", "贊助")),
+           ("intro", QT_TRANSLATE_NOOP("native_options", "片頭")),
+           ("outro", QT_TRANSLATE_NOOP("native_options", "片尾")),
+           ("selfpromo", QT_TRANSLATE_NOOP("native_options", "自我宣傳")),
+           ("preview", QT_TRANSLATE_NOOP("native_options", "預告/回顧")),
+           ("filler", QT_TRANSLATE_NOOP("native_options", "離題閒聊")),
+           ("interaction", QT_TRANSLATE_NOOP("native_options", "訂閱提醒")),
+           ("music_offtopic", QT_TRANSLATE_NOOP("native_options", "非音樂片段")),
+           ("poi_highlight", QT_TRANSLATE_NOOP("native_options", "精華")),
+           ("chapter", QT_TRANSLATE_NOOP("native_options", "章節"))]
 SPONSOR_NO_REMOVE = ("poi_highlight", "chapter")  # 這兩類只能標記，不能移除（同網頁版）
-TEMPLATES = [("%(title)s [%(id)s].%(ext)s", "標題 [ID]"), ("%(title)s.%(ext)s", "標題"),
-             ("%(uploader)s - %(title)s.%(ext)s", "作者 - 標題"),
-             ("%(upload_date>%Y-%m-%d)s %(title)s.%(ext)s", "日期 標題"),
-             ("%(playlist_index|)s %(title)s.%(ext)s", "清單序號 標題"),
-             ("%(uploader)s/%(title)s.%(ext)s", "作者資料夾/標題"), ("custom", "自訂…")]
-COOKIE_SOURCES = [("", "不使用"), ("file", "cookies.txt 檔案"), ("browser", "從瀏覽器讀取")]
+TEMPLATES = [("%(title)s [%(id)s].%(ext)s", QT_TRANSLATE_NOOP("native_options", "標題 [ID]")),
+             ("%(title)s.%(ext)s", QT_TRANSLATE_NOOP("native_options", "標題")),
+             ("%(uploader)s - %(title)s.%(ext)s", QT_TRANSLATE_NOOP("native_options", "作者 - 標題")),
+             ("%(upload_date>%Y-%m-%d)s %(title)s.%(ext)s", QT_TRANSLATE_NOOP("native_options", "日期 標題")),
+             ("%(playlist_index|)s %(title)s.%(ext)s", QT_TRANSLATE_NOOP("native_options", "清單序號 標題")),
+             ("%(uploader)s/%(title)s.%(ext)s", QT_TRANSLATE_NOOP("native_options", "作者資料夾/標題")),
+             ("custom", QT_TRANSLATE_NOOP("native_options", "自訂…"))]
+COOKIE_SOURCES = [("", QT_TRANSLATE_NOOP("native_options", "不使用")),
+                  ("file", QT_TRANSLATE_NOOP("native_options", "cookies.txt 檔案")),
+                  ("browser", QT_TRANSLATE_NOOP("native_options", "從瀏覽器讀取"))]
 BROWSERS = [("chrome", "Chrome"), ("edge", "Edge"), ("firefox", "Firefox"), ("brave", "Brave"),
             ("opera", "Opera"), ("vivaldi", "Vivaldi"), ("chromium", "Chromium"), ("safari", "Safari")]
 DEFAULT_TEMPLATE = TEMPLATES[0][0]
@@ -89,6 +110,8 @@ DEFAULTS: dict[str, object] = {
 }
 SETTINGS_GROUP = "advanced"
 _UNSAVED = object()  # save_settings：還沒存過的值
+# reveal_section() 接受的名稱：分組本身的 key，加上給其他頁面用的別名
+SECTION_ALIASES = {"subtitles": "subs", "sponsorblock": "sponsor", "metadata": "files", "cookies": "network"}
 # 自己畫的元件（開關、標籤、箭頭、標題列滑過）用的顏色；AdvancedOptions.apply_theme() 會更新
 THEME: dict[str, str] = dict(tokens(False))
 
@@ -100,14 +123,47 @@ def _ts(sec) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+_RANGE_CHUNK = re.compile(r"^\s*([\d:.]+)\s*[-~到]\s*([\d:.]+|inf|end)?\s*$")  # 同 server._parse_ranges
+
+
 def range_error(text: str) -> str:
-    """檢查時間範圍文字；正確回傳空字串。直接用引擎的解析器，規則與錯誤訊息和下載時完全一致。"""
+    """檢查時間範圍文字；正確回傳空字串。
+
+    用引擎的解析器判斷（規則和下載時完全一致），但訊息在 App 端依介面語言重組：
+    引擎的訊息只有中文，而且這裡是直接呼叫函式，不是走 API。
+    """
     from server import _parse_ranges  # 延遲匯入：只在真的要檢查時才載入引擎模組
     try:
         _parse_ranges(text)
-    except ValueError as e:
-        return str(e)
-    return ""
+        return ""
+    except ValueError:
+        pass
+    for chunk in re.split(r"[,\n;]+", text or ""):  # 找出是哪一段錯了
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            _parse_ranges(chunk)
+        except ValueError:
+            if _RANGE_CHUNK.match(chunk):
+                return _tr(_CTX, "時間範圍「{chunk}」無效：請確認時間寫法正確，而且結束時間比開始時間晚").format(
+                    chunk=chunk)
+            return _tr(_CTX, "看不懂時間範圍「{chunk}」，例如：0:30-1:45, 3:00-end").format(chunk=chunk)
+    return _tr(_CTX, "時間範圍格式不正確，例如：0:30-1:45, 3:00-end")
+
+
+def _items(items) -> list[tuple[str, str]]:
+    """選項清單 → 依目前介面語言翻譯好的 (值, 顯示文字)。品牌、格式名稱（AV1、SRT）沒標記，原樣回傳。"""
+    return [(k, _tr(_CTX, v)) for k, v in items]
+
+
+def _focus_ring(p: QPainter, rect: QRectF, radius: float):
+    """自繪元件統一的焦點環：2 px、系統強調色（比原本 1.5 px 的淡色明顯，鍵盤操作時看得到）。"""
+    p.save()
+    p.setPen(QPen(_color(THEME["accent"]), 2))
+    p.setBrush(Qt.NoBrush)
+    p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), max(0.0, radius - 1), max(0.0, radius - 1))
+    p.restore()
 
 
 def _unique(items) -> list:
@@ -145,12 +201,16 @@ class Switch(QAbstractButton):
     """macOS 風格的切換開關（38×22 膠囊軌道＋白色圓鈕，開啟為系統藍，切換時滑動）。
 
     Qt 沒有原生的 switch，所以兩個平台都用這個自己畫的版本；顏色取自 THEME（native_app.tokens()）。
+    title 是給朗讀程式念的名稱（開關本身沒有文字）；放進 switch_row() 時會自動用該列的標題。
+    朗讀程式另外會念「核取方塊、已勾選／未勾選」（QAbstractButton 的 checkable 狀態）。
     """
 
-    def __init__(self, checked: bool = False):
+    def __init__(self, checked: bool = False, title: str = ""):
         super().__init__()
         self.setCheckable(True)
         self.setChecked(checked)
+        if title:
+            self.setAccessibleName(title)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.TabFocus)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -160,7 +220,9 @@ class Switch(QAbstractButton):
         self.toggled.connect(self._animate)
 
     def sizeHint(self) -> QSize:
-        return QSize(38, 22)
+        # 一般字級（字高 ≤ 17 px）維持 macOS 的 38×22；文字放大（App 的「文字大小」設定）時跟著字高等比放大
+        h = max(22, round(self.fontMetrics().height() * 1.25))
+        return QSize(round(h * 38 / 22), h)
 
     def _set_pos(self, v):
         self._pos = float(v)
@@ -199,9 +261,7 @@ class Switch(QAbstractButton):
         p.setBrush(QColor("#FFFFFF"))
         p.drawEllipse(knob)
         if self.hasFocus():
-            p.setPen(QPen(on, 2))
-            p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(r.adjusted(-0.5, -0.5, 0.5, 0.5), h / 2, h / 2)
+            _focus_ring(p, QRectF(self.rect()), self.height() / 2)
         p.end()
 
 
@@ -285,21 +345,31 @@ class _HoverRepaint:
 
 
 class Chip(_HoverRepaint, QAbstractButton):
-    """膠囊標籤（macOS 的 token 樣式）：自己畫，不依賴 QSS，在原生 macOS 樣式下外觀也一致。"""
+    """膠囊標籤（macOS 的 token 樣式）：自己畫，不依賴 QSS，在原生 macOS 樣式下外觀也一致。
 
-    H = 22
+    可複選的標籤是 checkable 按鈕，朗讀程式會念出「已勾選／未勾選」；name 是朗讀用的完整名稱
+    （例如章節標籤畫面上的標題會截短）。
+    """
 
-    def __init__(self, text: str, checkable: bool = True):
+    H = 22  # 最小高度；實際高度依字高計算
+
+    def __init__(self, text: str, checkable: bool = True, name: str = ""):
         super().__init__()
         self.setText(text)
         self.setCheckable(checkable)
+        self.setAccessibleName(name or text)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.TabFocus)
         self.setAttribute(Qt.WA_Hover)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
     def sizeHint(self) -> QSize:
-        return QSize(self.fontMetrics().horizontalAdvance(self.text()) + 20, self.H)
+        fm = self.fontMetrics()  # 用字型量寬高：英文標籤較長、文字放大時都不會被切掉
+        h = max(self.H, fm.height() + 6)
+        return QSize(fm.horizontalAdvance(self.text()) + max(20, h - 2), h)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -310,9 +380,13 @@ class Chip(_HoverRepaint, QAbstractButton):
         p.setBrush(_color(THEME["accent"] if on else THEME["seg"]))
         p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
         if self.hasFocus():
-            p.setPen(QPen(_color(THEME["accent"]), 1.5))
-            p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
+            # 選中的標籤底色就是強調色，焦點環改用文字色才看得出來
+            if on:
+                p.setPen(QPen(_color(THEME["text"]), 2))
+                p.setBrush(Qt.NoBrush)
+                p.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), r.height() / 2 - 1, r.height() / 2 - 1)
+            else:
+                _focus_ring(p, QRectF(self.rect()), r.height() / 2)
         p.setPen(_color(THEME["accent_text"] if on else THEME["text"]))
         p.drawText(self.rect(), Qt.AlignCenter, self.text())
         p.end()
@@ -409,6 +483,7 @@ class Icon(QWidget):
         super().__init__()
         self.kind, self.color = kind, QColor(color)
         self.setFixedSize(24, 24)
+        self.setFocusPolicy(Qt.NoFocus)  # 純裝飾：不能取得焦點
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -466,6 +541,7 @@ class Chevron(QWidget):
     def __init__(self):
         super().__init__()
         self.setFixedSize(14, 14)
+        self.setFocusPolicy(Qt.NoFocus)  # 純裝飾：展開狀態由 SectionHeader 的 accessibleDescription 回報
         self.expanded = False
 
     def paintEvent(self, _):
@@ -480,15 +556,27 @@ class Chevron(QWidget):
 
 
 class SectionHeader(_HoverRepaint, QWidget):
-    """分組標題列：可點擊、滑過時淡淡加深（自己畫，不是 QPushButton，所以不吃按鈕樣式）。"""
+    """分組標題列：可點擊、滑過時淡淡加深（自己畫，不是 QPushButton，所以不吃按鈕樣式）。
+
+    朗讀程式念 accessibleName（分組名稱）和 accessibleDescription（已展開／已收合），
+    由 Section.set_expanded() 更新。
+    """
     clicked = Signal()
 
-    def __init__(self):
+    def __init__(self, title: str = ""):
         super().__init__()
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover)
         self.setFocusPolicy(Qt.TabFocus)
+        if title:
+            self.setAccessibleName(title)
         self.open = False
+        self.set_open(False)
+
+    def set_open(self, on: bool):
+        self.open = on
+        self.setAccessibleDescription(self.tr("已展開") if on else self.tr("已收合，按空白鍵展開"))
+        self.update()
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.LeftButton and self.rect().contains(e.position().toPoint()):
@@ -519,6 +607,10 @@ class SectionHeader(_HoverRepaint, QWidget):
         else:
             path.addRoundedRect(r, rad, rad)
         p.fillPath(path, _color(THEME["hover"]))
+        if self.hasFocus():
+            p.setPen(QPen(_color(THEME["accent"]), 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path)
         p.end()
 
 
@@ -533,7 +625,7 @@ class Section(QFrame):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        self.header = SectionHeader()
+        self.header = SectionHeader(title)
         self.header.clicked.connect(lambda: self.set_expanded(not self.body.isVisible()))
         hl = QHBoxLayout(self.header)
         hl.setContentsMargins(12, 8, 14, 8)
@@ -566,16 +658,36 @@ class Section(QFrame):
         self.chevron.expanded = on
         self.chevron.update()
         self.line.setVisible(on)
-        self.header.open = on
-        self.header.update()
+        self.header.set_open(on)
         self.toggled.emit(on)
 
     def expanded(self) -> bool:
         return self.body.isVisibleTo(self)
 
 
+def _name(widget: QWidget, title: str, hint: str = ""):
+    """把列的標題設成控制項的無障礙名稱（說明文字當描述）；已經有名稱的不覆蓋。"""
+    if not widget.accessibleName():
+        widget.setAccessibleName(title)
+    if hint and not widget.accessibleDescription():
+        widget.setAccessibleDescription(hint)
+
+
+def labeled_row(title: str, widget: QWidget) -> QWidget:
+    """native_common.form_row() 再加上無障礙名稱：朗讀程式念「畫面更新率上限，下拉式方塊」而不只是選項值。
+
+    分段控制的每顆按鈕本身有文字，名稱設在外框上，按鈕的描述寫上所屬的標題。
+    """
+    _name(widget, title)
+    if isinstance(widget, Segmented):
+        for b in widget.buttons.values():
+            b.setAccessibleDescription(title)
+    return form_row(title, widget)
+
+
 def switch_row(title: str, sw: Switch, hint: str = "") -> QWidget:
-    """一列：左邊標題（可加灰色說明），右邊開關。"""
+    """一列：左邊標題（可加灰色說明），右邊開關。標題會設成開關的無障礙名稱、說明設成描述。"""
+    _name(sw, title, hint)
     w = QWidget()
     w.setObjectName("row")
     lay = QHBoxLayout(w)
@@ -593,7 +705,15 @@ def switch_row(title: str, sw: Switch, hint: str = "") -> QWidget:
 
 
 def block_row(title: str, widget: QWidget, hint: str = "", extra: QWidget | None = None) -> QWidget:
-    """一列：上方標題，下方是較寬的內容（標籤群、輸入框）。"""
+    """一列：上方標題，下方是較寬的內容（標籤群、輸入框）。標題會設成內容的無障礙名稱。
+
+    內容是容器（例如輸入框＋提示的組合）時，名稱也設給裡面第一個可輸入的元件。
+    """
+    _name(widget, title, hint)
+    if not widget.focusPolicy() & Qt.TabFocus:
+        for child in widget.findChildren(QLineEdit):
+            _name(child, title, hint)
+            break
     w = QWidget()
     w.setObjectName("row")
     lay = QVBoxLayout(w)
@@ -625,7 +745,7 @@ class IntField(QLineEdit):
         super().__init__(str(default))
         self.lo, self.hi, self.default = lo, hi, default
         self.setValidator(QIntValidator(lo, hi, self))
-        self.setFixedWidth(70)
+        self.setFixedWidth(_text_width(self, "8888", 70))
         self.setAlignment(Qt.AlignRight)
         self.editingFinished.connect(lambda: self.setValue(self.value()))  # 空白或超出範圍時改回合法值
 
@@ -641,11 +761,19 @@ class IntField(QLineEdit):
             self.setText(v)
 
 
+def _text_width(w: QWidget, text: str, minimum: int) -> int:
+    """輸入框要放得下 text 的寬度（字型量出來的，加上內距與清除鈕的空間），至少 minimum。
+
+    提示文字會翻成英文（通常比中文長），不能只寫死像素寬度。
+    """
+    return max(minimum, QFontMetrics(w.font()).horizontalAdvance(text) + 32)
+
+
 def _field(placeholder: str, width: int = 0, mono: bool = True) -> QLineEdit:
     e = QLineEdit()
     e.setPlaceholderText(placeholder)
     if width:
-        e.setFixedWidth(width)
+        e.setFixedWidth(_text_width(e, placeholder, width))
     if mono:
         # 等寬字由 native_app.stylesheet() 的 QLineEdit[mono="true"] 決定字型，字級跟著 App 的文字大小設定
         e.setProperty("mono", True)
@@ -667,17 +795,31 @@ class AdvancedOptions(QWidget):
         self.mode = "av"
         self._restoring = False
         self._saved: dict = {}  # 上次寫進 QSettings 的值（只寫有變動的）
+        self._before_reset: dict | None = None  # 「恢復預設」前的值，給「復原」用
+        self._reset_values: dict = {}  # 剛恢復預設後的值；之後值變了就不再提供復原
         self.cookie_exists = False
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
         head = QHBoxLayout()
-        head.addWidget(label("進階選項", "sectionHeader"))
+        head.addWidget(label(self.tr("進階選項"), "sectionHeader"))
         head.addStretch()
-        self.reset_btn = link_button("還原預設值")
+        # 「恢復預設」之後在原位顯示提示＋「復原」，直到再改任何選項或 15 秒後
+        self.reset_note = label(self.tr("已恢復預設"), "subtitle")
+        self.undo_btn = link_button(self.tr("復原"))
+        self.undo_btn.setAccessibleName(self.tr("復原進階選項"))
+        self.undo_btn.clicked.connect(self.undo_reset)
+        self._undo_timer = QTimer(self, singleShot=True, interval=15000)
+        self._undo_timer.timeout.connect(self._drop_undo)
+        # 範圍寫在按鈕上：設定頁另有「重設所有偏好」，兩個不要搞混
+        self.reset_btn = link_button(self.tr("進階選項恢復預設"))
+        self.reset_btn.setToolTip(self.tr("只重設下面這些進階選項，不影響畫質、格式和設定頁的偏好；可以復原"))
         self.reset_btn.clicked.connect(self.reset)
-        head.addWidget(self.reset_btn)
+        for w in (self.reset_note, self.undo_btn, self.reset_btn):
+            head.addWidget(w)
+        self.reset_note.hide()
+        self.undo_btn.hide()
         lay.addLayout(head)
 
         self.sections: dict[str, Section] = {}
@@ -721,48 +863,52 @@ class AdvancedOptions(QWidget):
         return sw
 
     def _seg(self, items) -> Segmented:
-        seg = Segmented(items)
+        # 方向鍵切換：Qt 的 QAbstractButton 在同一個 QButtonGroup 裡本來就支援（tests 有鎖住）
+        seg = Segmented(_items(items))
         seg.changed.connect(lambda *_: self.changed.emit())
         return seg
 
     def _pop(self, items) -> PopUp:
-        pop = PopUp(items)
+        pop = PopUp(_items(items))
         pop.currentIndexChanged.connect(lambda *_: self.changed.emit())
         return pop
 
     def _build_video(self):
-        s = self._section("video", "影片", "video", "#FF3B30")
+        s = self._section("video", self.tr("影片"), "video", "#FF3B30")
         self.codec = self._seg(VCODECS)
         self.max_fps = self._pop(FPS_LIMITS)
         self.hdr = self._seg(HDR)
         self.recode = self._switch("recode")
         self.prefer_size = self._switch("prefer_size")
         self.premium = self._switch("premium")
-        s.add(form_row("編碼偏好", self.codec))
-        s.add(form_row("畫面更新率上限", self.max_fps))
-        s.add(form_row("動態範圍", self.hdr))
-        s.add(switch_row("重新編碼（而非重新封裝）", self.recode, "容器不相容時強制轉檔，較慢但保證格式"))
-        s.add(switch_row("偏好較小檔案", self.prefer_size, "同條件下優先選擇檔案最小者"))
-        s.add(switch_row("YouTube Premium 高位元率", self.premium,
-                         "優先下載 Premium 專屬的 1080p 高位元率串流（需在「網路」設定 Premium 帳號的 Cookie）"))
+        s.add(labeled_row(self.tr("編碼偏好"), self.codec))
+        s.add(labeled_row(self.tr("畫面更新率上限"), self.max_fps))
+        s.add(labeled_row(self.tr("動態範圍"), self.hdr))
+        s.add(switch_row(self.tr("一律轉檔成選擇的格式"), self.recode,
+                         self.tr("原始影片的格式不相容時重新轉檔，比較慢，但一定是你選的格式")))
+        s.add(switch_row(self.tr("偏好較小檔案"), self.prefer_size, self.tr("同條件下優先選擇檔案最小者")))
+        s.add(switch_row(self.tr("YouTube Premium 高位元率"), self.premium,
+                         self.tr("優先下載 Premium 專屬的 1080p 高位元率串流（需在「網路」設定 Premium 帳號的 Cookie）")))
 
     def _build_audio(self):
-        s = self._section("audio", "音訊", "audio", "#FF2D55")
-        self.tracks = ChipGroup(empty="解析影片後顯示可用的音軌")
+        s = self._section("audio", self.tr("音訊"), "audio", "#FF2D55")
+        self.tracks = ChipGroup(empty=self.tr("解析影片後顯示可用的音軌"))
         self.tracks.changed.connect(self.changed)
         self.prefer_acodec = self._seg(ACODEC_PREFER)
         self.allow_drc = self._switch("allow_drc")
-        self.r_tracks = s.add(block_row("音軌語言", self.tracks, "可複選，多選會一併合併進影片（建議 MKV）"))
-        self.r_prefer_acodec = s.add(form_row("合併時音訊編碼偏好", self.prefer_acodec))
-        s.add(switch_row("允許 DRC 音軌", self.allow_drc, "動態範圍壓縮版本（音量較平均）"))
+        self.r_tracks = s.add(block_row(self.tr("音軌語言"), self.tracks,
+                                        self.tr("可複選，多選會一併合併進影片（建議 MKV）")))
+        self.r_prefer_acodec = s.add(labeled_row(self.tr("合併時音訊編碼偏好"), self.prefer_acodec))
+        s.add(switch_row(self.tr("允許 DRC 音軌"), self.allow_drc, self.tr("動態範圍壓縮版本（音量較平均）")))
 
     def _build_subs(self):
-        s = self._section("subs", "字幕", "subs", "#FF9500")
-        self.subs = ChipGroup(empty="解析影片後顯示上傳者字幕")
+        s = self._section("subs", self.tr("字幕"), "subs", "#FF9500")
+        self.subs = ChipGroup(empty=self.tr("解析影片後顯示上傳者字幕"))
         self.subs.changed.connect(self.changed)
-        self.autos = ChipGroup(empty="解析影片後顯示自動字幕")
+        self.autos = ChipGroup(empty=self.tr("解析影片後顯示自動字幕"))
         self.autos.changed.connect(self.changed)
-        self.auto_search = _field("搜尋語言，例：中文、zh、Japanese…", mono=False)
+        self.auto_search = _field(self.tr("搜尋語言，例：中文、zh、Japanese…"), mono=False)
+        self.auto_search.setAccessibleName(self.tr("搜尋自動字幕語言"))
         self.auto_search.textChanged.connect(self.autos.filter)
         autos_box = QWidget()
         al = QVBoxLayout(autos_box)
@@ -772,6 +918,7 @@ class AdvancedOptions(QWidget):
         self.autos_scroll = FitScroll(150)
         self.autos_scroll.setWidgetResizable(True)
         self.autos_scroll.setFrameShape(QFrame.NoFrame)
+        self.autos_scroll.setFocusPolicy(Qt.NoFocus)  # 捲動區本身不是 Tab 停留點（看不到焦點）
         self.autos_scroll.setWidget(self.autos)
         self.autos_scroll.viewport().setAutoFillBackground(False)  # 透明，露出卡片底色
         self.autos.setAutoFillBackground(False)
@@ -782,26 +929,29 @@ class AdvancedOptions(QWidget):
         ql = QHBoxLayout(quick)
         ql.setContentsMargins(0, 0, 0, 0)
         ql.setSpacing(2)
-        for text, fn in (("中文", lambda: self.quick_pick(r"^zh(-Hant|-TW|-HK|-Hans|-CN)?$")),
-                         ("英文", lambda: self.quick_pick(r"^en(-[A-Z]{2})?$|^en-orig$")),
-                         ("清除", self.clear_subs)):
+        for text, name, fn in (
+                (self.tr("中文"), self.tr("選擇中文字幕"), lambda: self.quick_pick(r"^zh(-Hant|-TW|-HK|-Hans|-CN)?$")),
+                (self.tr("英文"), self.tr("選擇英文字幕"), lambda: self.quick_pick(r"^en(-[A-Z]{2})?$|^en-orig$")),
+                (self.tr("清除"), self.tr("清除字幕選擇"), self.clear_subs)):
             b = link_button(text)
+            b.setAccessibleName(name)
             b.clicked.connect(fn)
             ql.addWidget(b)
         self.sub_format = self._seg(SUB_FORMATS)
         self.sub_embed = self._switch("sub_embed")
         self.sub_keep = self._switch("sub_keep")
         self.sub_all = self._switch("sub_all")
-        s.add(block_row("上傳者字幕", self.subs, "可複選", quick))
-        s.add(block_row("自動字幕／自動翻譯", autos_box, "可複選"))
-        s.add(form_row("字幕格式", self.sub_format))
-        self.r_sub_embed = s.add(switch_row("嵌入影片", self.sub_embed, "寫入 MP4 / MKV / WebM 字幕軌"))
-        self.r_sub_keep = s.add(switch_row("同時另存字幕檔", self.sub_keep, "嵌入後仍輸出獨立字幕檔"))
-        s.add(switch_row("下載所有上傳者字幕", self.sub_all, "忽略上方的選擇"))
+        s.add(block_row(self.tr("上傳者字幕"), self.subs, self.tr("可複選"), quick))
+        s.add(block_row(self.tr("自動字幕／自動翻譯"), autos_box, self.tr("可複選")))
+        s.add(labeled_row(self.tr("字幕格式"), self.sub_format))
+        self.r_sub_embed = s.add(switch_row(self.tr("嵌入影片"), self.sub_embed,
+                                            self.tr("寫入 MP4 / MKV / WebM 字幕軌")))
+        self.r_sub_keep = s.add(switch_row(self.tr("同時另存字幕檔"), self.sub_keep, self.tr("嵌入後仍輸出獨立字幕檔")))
+        s.add(switch_row(self.tr("下載所有上傳者字幕"), self.sub_all, self.tr("忽略上方的選擇")))
 
     def _build_clip(self):
-        s = self._section("clip", "剪輯", "clip", "#AF52DE")
-        self.sections_edit = _field("例：0:30-1:45, 3:00-end")
+        s = self._section("clip", self.tr("剪輯"), "clip", "#AF52DE")
+        self.sections_edit = _field(self.tr("例：0:30-1:45, 3:00-end"))
         self.sections_edit.textChanged.connect(lambda *_: self.changed.emit())
         self.range_hint = label("", wrap=True)  # 紅字用 rich text（app 的 QSS 會蓋過 palette 顏色）
         self.range_hint.setTextFormat(Qt.RichText)
@@ -813,31 +963,32 @@ class AdvancedOptions(QWidget):
         bl.setSpacing(6)
         bl.addWidget(self.sections_edit)
         bl.addWidget(self.range_hint)
-        self.chapter_hint = _hint("點章節即可加入範圍：")
+        self.chapter_hint = _hint(self.tr("點章節即可加入範圍："))
         bl.addWidget(self.chapter_hint)
         bl.addWidget(self.chapters)
-        clear = link_button("清除")
+        clear = link_button(self.tr("清除"))
+        clear.setAccessibleName(self.tr("清除時間範圍"))
         clear.clicked.connect(self.sections_edit.clear)
         self.split_chapters = self._switch("split_chapters")
         self.force_keyframes = self._switch("force_keyframes")
         self.live_from_start = self._switch("live_from_start")
-        s.add(block_row("時間範圍", box, "只下載這些片段，可多段、逗號分隔", clear))
-        s.add(switch_row("依章節切割成多個檔案", self.split_chapters))
-        s.add(switch_row("切點強制關鍵影格", self.force_keyframes, "切割更精準（需重新編碼，較慢）"))
-        s.add(switch_row("直播從頭下載", self.live_from_start))
+        s.add(block_row(self.tr("時間範圍"), box, self.tr("只下載這些片段，可多段、逗號分隔"), clear))
+        s.add(switch_row(self.tr("依章節切割成多個檔案"), self.split_chapters))
+        s.add(switch_row(self.tr("切點強制關鍵影格"), self.force_keyframes, self.tr("切割更精準（需重新編碼，較慢）")))
+        s.add(switch_row(self.tr("直播從頭下載"), self.live_from_start))
         self._render_chapters()
 
     def _build_sponsor(self):
         s = self._section("sponsor", "SponsorBlock", "skip", "#34C759")
-        self.sb_remove = ChipGroup([(k, v) for k, v in SPONSOR if k not in SPONSOR_NO_REMOVE])
-        self.sb_mark = ChipGroup(SPONSOR)
+        self.sb_remove = ChipGroup(_items((k, v) for k, v in SPONSOR if k not in SPONSOR_NO_REMOVE))
+        self.sb_mark = ChipGroup(_items(SPONSOR))
         self.sb_remove.changed.connect(self.changed)
         self.sb_mark.changed.connect(self.changed)
-        s.add(block_row("移除片段", self.sb_remove, "從影片中剪掉社群標記的片段"))
-        s.add(block_row("標記為章節", self.sb_mark, "保留片段，但加上章節標記"))
+        s.add(block_row(self.tr("移除片段"), self.sb_remove, self.tr("從影片中剪掉社群標記的片段")))
+        s.add(block_row(self.tr("標記為章節"), self.sb_mark, self.tr("保留片段，但加上章節標記")))
 
     def _build_files(self):
-        s = self._section("files", "中繼資料與檔案", "file", "#5856D6")
+        s = self._section("files", self.tr("中繼資料與檔案"), "file", "#5856D6")
         self.embed_metadata = self._switch("embed_metadata")
         self.embed_chapters = self._switch("embed_chapters")
         self.embed_thumbnail = self._switch("embed_thumbnail")
@@ -853,25 +1004,29 @@ class AdvancedOptions(QWidget):
         self.template.textChanged.connect(self._sync_preset)
         self.template.textChanged.connect(lambda *_: self.changed.emit())
         self.restrict_filenames = self._switch("restrict_filenames")
-        s.add(switch_row("嵌入中繼資料", self.embed_metadata, "標題、作者、日期、描述"))
-        s.add(switch_row("嵌入章節", self.embed_chapters))
-        s.add(switch_row("嵌入封面縮圖", self.embed_thumbnail))
-        s.add(switch_row("另存縮圖檔", self.write_thumbnail))
-        self.r_thumb_format = s.add(form_row("縮圖格式", self.thumb_format))
-        s.add(switch_row("另存影片說明", self.write_description, ".description 文字檔"))
-        s.add(switch_row("另存完整資訊", self.write_infojson, ".info.json"))
-        s.add(switch_row("下載留言", self.write_comments, "寫入 info.json；留言多時會很慢"))
-        s.add(switch_row("保留合併前原始檔", self.keep_original))
-        s.add(block_row("檔名範本", self.template, "yt-dlp 輸出範本", self.template_preset))
-        s.add(switch_row("限制檔名字元", self.restrict_filenames, "只用 ASCII，移除空白與特殊字元"))
+        s.add(switch_row(self.tr("嵌入中繼資料"), self.embed_metadata, self.tr("標題、作者、日期、描述")))
+        s.add(switch_row(self.tr("嵌入章節"), self.embed_chapters))
+        s.add(switch_row(self.tr("嵌入封面縮圖"), self.embed_thumbnail))
+        s.add(switch_row(self.tr("另存縮圖檔"), self.write_thumbnail))
+        self.r_thumb_format = s.add(labeled_row(self.tr("縮圖格式"), self.thumb_format))
+        s.add(switch_row(self.tr("另存影片說明"), self.write_description, self.tr(".description 文字檔")))
+        s.add(switch_row(self.tr("另存完整資訊"), self.write_infojson, ".info.json"))
+        s.add(switch_row(self.tr("下載留言"), self.write_comments, self.tr("寫入 info.json；留言多時會很慢")))
+        s.add(switch_row(self.tr("保留合併前原始檔"), self.keep_original))
+        self.template_preset.setAccessibleName(self.tr("常用檔名範本"))
+        s.add(block_row(self.tr("檔名範本"), self.template, self.tr("用 %(title)s 這類代號組出檔名"),
+                        self.template_preset))
+        s.add(switch_row(self.tr("限制檔名字元"), self.restrict_filenames, self.tr("只用英數字，移除空白與特殊字元")))
 
     def _build_network(self):
-        s = self._section("network", "網路", "globe", "#007AFF")
+        s = self._section("network", self.tr("網路"), "globe", "#007AFF")
         self.cookie_source = self._pop(COOKIE_SOURCES)
         self.cookie_status = label("", "subtitle")
-        choose = link_button("選擇檔案…")
+        choose = link_button(self.tr("選擇檔案…"))
+        choose.setAccessibleName(self.tr("選擇 cookies.txt 檔案"))
         choose.clicked.connect(self.choose_cookies)
-        self.cookie_remove = link_button("移除", "destructiveLink")
+        self.cookie_remove = link_button(self.tr("移除"), "destructiveLink")
+        self.cookie_remove.setAccessibleName(self.tr("移除已上傳的 cookies.txt"))
         self.cookie_remove.clicked.connect(self.remove_cookies)
         cbox = QWidget()
         cl = QHBoxLayout(cbox)
@@ -882,14 +1037,14 @@ class AdvancedOptions(QWidget):
         cl.addWidget(self.cookie_remove)
         self.browser = self._pop(BROWSERS)
         self.proxy = _field("socks5://127.0.0.1:1080", 260)
-        self.rate_limit = _field("例：5M", 110)
+        self.rate_limit = _field(self.tr("例：5M"), 110)
         self.geo = _field("TW", 70)
         self.geo.setMaxLength(2)
         self.fragments = QSlider(Qt.Horizontal)
         self.fragments.setRange(1, 16)
         self.fragments.setFixedWidth(170)
         self.fragments_value = label("4", "subtitle")
-        self.fragments_value.setMinimumWidth(18)
+        self.fragments_value.setMinimumWidth(self.fragments_value.fontMetrics().horizontalAdvance("16") + 2)
         fbox = QWidget()
         fl = QHBoxLayout(fbox)
         fl.setContentsMargins(0, 0, 0, 0)
@@ -901,22 +1056,23 @@ class AdvancedOptions(QWidget):
         self.retries.textChanged.connect(lambda *_: self.changed.emit())
         for e in (self.proxy, self.rate_limit, self.geo):
             e.textChanged.connect(lambda *_: self.changed.emit())
-        s.add(form_row("Cookie 來源", self.cookie_source))
+        s.add(labeled_row(self.tr("Cookie 來源"), self.cookie_source))
         self.r_cookie_file = s.add(form_row("cookies.txt", cbox))
-        self.r_browser = s.add(form_row("瀏覽器", self.browser))
-        s.add(form_row("代理伺服器", self.proxy))
-        s.add(form_row("限速（每秒）", self.rate_limit))
-        s.add(form_row("地區（國碼）", self.geo))
-        s.add(form_row("並行分段", fbox))
-        s.add(form_row("重試次數", self.retries))
+        self.r_browser = s.add(labeled_row(self.tr("瀏覽器"), self.browser))
+        s.add(labeled_row(self.tr("代理伺服器"), self.proxy))
+        s.add(labeled_row(self.tr("限速（每秒）"), self.rate_limit))
+        s.add(labeled_row(self.tr("地區（國碼）"), self.geo))
+        _name(self.fragments, self.tr("同時下載的分段數"))
+        s.add(form_row(self.tr("並行分段"), fbox))
+        s.add(labeled_row(self.tr("重試次數"), self.retries))
 
     # ---------- 解析結果 / 模式 ----------
     def set_info(self, info: dict | None):
         """依解析結果更新可選的音軌、字幕、章節（換影片時清掉上一部的選擇）。"""
         self.info = info or {}
         tracks = self.info.get("audio_tracks") or []
-        self.tracks.set_items([(t["lang"], t.get("label", t["lang"]) + ("（原音）" if t.get("original") else ""))
-                               for t in tracks])
+        self.tracks.set_items([(t["lang"], self.tr("{track}（原音）").format(track=t.get("label", t["lang"]))
+                                if t.get("original") else t.get("label", t["lang"])) for t in tracks])
         self.subs.set_items([(x["lang"], x.get("name") or x["lang"]) for x in self.info.get("subtitles") or []])
         self.autos.set_items([(x["lang"], x.get("name") or x["lang"]) for x in self.info.get("auto_captions") or []])
         self.auto_search.clear()
@@ -940,6 +1096,37 @@ class AdvancedOptions(QWidget):
         self.sections["sponsor"].setVisible(media)
         self._on_changed()
 
+    def reveal_section(self, key: str, focus: bool = False) -> bool:
+        """展開分組並捲到它（例如切到字幕模式時、摘要的錯誤連結點下去時）。
+
+        key：分組名稱 video／audio／subs／clip／sponsor／files／network，或別名 subtitles、sponsorblock、
+        metadata、cookies。focus=True 時把焦點移到該分組最主要的輸入元件（例如剪輯的時間範圍），
+        沒有就移到分組標題。分組因目前的下載模式被隱藏時不會強制顯示，回傳 False；不認得的 key 也回傳 False。
+        """
+        s = self.sections.get(SECTION_ALIASES.get(key, key))
+        if s is None:
+            return False
+        if not s.expanded():
+            s.set_expanded(True)  # 會發出 toggled → 記住展開狀態
+        if s.isHidden():
+            return False
+        if focus:
+            target = {"clip": self.sections_edit, "network": self.cookie_source,
+                      "subs": self.auto_search if not self.subs.chips else None}.get(s.key)
+            (target if target is not None and target.isVisible() else s.header).setFocus(Qt.OtherFocusReason)
+        # 展開後版面要等下一輪事件才會算好，捲動要延後
+        QTimer.singleShot(0, self, lambda: self._scroll_to(s))  # context=self：面板被刪掉時不會再呼叫
+        return True
+
+    def _scroll_to(self, s: Section):
+        w = self.parentWidget()
+        while w is not None and not isinstance(w, QScrollArea):
+            w = w.parentWidget()
+        if w is None or not s.isVisible():
+            return
+        w.ensureWidgetVisible(s, 0, 12)  # 盡量整個分組都看得到
+        w.ensureWidgetVisible(s.header, 0, 12)  # 分組比畫面高時，至少標題要在畫面上方
+
     def _render_chapters(self):
         while self.chapter_flow.count():
             w = self.chapter_flow.takeAt(0).widget()
@@ -947,7 +1134,9 @@ class AdvancedOptions(QWidget):
         chapters = (self.info or {}).get("chapters") or []
         for c in chapters[:40]:
             title = (c.get("title") or "")
-            b = Chip(f"{_ts(c.get('start'))}  {title[:18]}", checkable=False)
+            start = _ts(c.get("start"))
+            b = Chip(f"{start}  {title[:18]}", checkable=False,
+                     name=self.tr("加入章節 {start} {title}").format(start=start, title=title))
             b.setToolTip(title)
             b.clicked.connect(lambda _=False, ch=c: self.add_chapter(ch))
             self.chapter_flow.addWidget(b)
@@ -1028,14 +1217,17 @@ class AdvancedOptions(QWidget):
         net.set_row_visible(self.r_cookie_file, src == "file")
         net.set_row_visible(self.r_browser, src == "browser")
         self.cookie_remove.setVisible(self.cookie_exists)
-        self.cookie_status.setText("已上傳" if self.cookie_exists else "尚未上傳")
+        self.cookie_status.setText(self.tr("已上傳") if self.cookie_exists else self.tr("尚未上傳"))
         self.sections["files"].set_row_visible(
             self.r_thumb_format, self.write_thumbnail.isChecked() or self.embed_thumbnail.isChecked())
         self.sections["audio"].set_row_visible(self.r_tracks, bool(self.tracks.chips) or not self.info)
         self._render_range_hint()
         self._update_summaries()
         if not self._restoring:
-            self.save_settings()
+            vals = self._values()
+            if self._before_reset is not None and vals != self._reset_values:
+                self._drop_undo()  # 恢復預設之後又改了選項：不再提供復原（避免蓋掉新的修改）
+            self.save_settings(vals)
 
     def _render_range_hint(self):
         err = self.error()
@@ -1051,24 +1243,29 @@ class AdvancedOptions(QWidget):
                                          self.hdr.value() and self.hdr.buttons[self.hdr.value()].text(),
                                          "Premium" if self.premium.isChecked() else ""))
         n_tracks = len(self.tracks.values())
-        sm["audio"].summary.setText(f"{n_tracks} 條音軌" if n_tracks else "")
+        sm["audio"].summary.setText(_tr("AdvancedOptions", "%n 條音軌", None, n_tracks) if n_tracks else "")
         n_subs = len(self.subs.values()) + len(self.autos.values())
-        sm["subs"].summary.setText(join("全部上傳者字幕" if self.sub_all.isChecked()
-                                        else (f"{n_subs} 種語言" if n_subs else ""),
+        sm["subs"].summary.setText(join(self.tr("全部上傳者字幕") if self.sub_all.isChecked()
+                                        else (_tr("AdvancedOptions", "%n 種語言", None, n_subs) if n_subs else ""),
                                         self.sub_format.buttons[self.sub_format.value()].text()
                                         if n_subs or self.sub_all.isChecked() else ""))
         n_ranges = len([c for c in re.split(r"[,\n;]+", self.sections_edit.text()) if c.strip()])
-        sm["clip"].summary.setText(join(f"{n_ranges} 段" if n_ranges else "",
-                                        "依章節切割" if self.split_chapters.isChecked() else ""))
+        sm["clip"].summary.setText(join(_tr("AdvancedOptions", "%n 段", None, n_ranges) if n_ranges else "",
+                                        self.tr("依章節切割") if self.split_chapters.isChecked() else ""))
         sb = len(self.sb_remove.values()), len(self.sb_mark.values())
-        sm["sponsor"].summary.setText(join(f"移除 {sb[0]} 類" if sb[0] else "", f"標記 {sb[1]} 類" if sb[1] else ""))
+        sm["sponsor"].summary.setText(join(_tr("AdvancedOptions", "移除 %n 類", None, sb[0]) if sb[0] else "",
+                                           _tr("AdvancedOptions", "標記 %n 類", None, sb[1]) if sb[1] else ""))
         src = self.cookie_source.currentData()
+        rate = self.rate_limit.text().strip()
         sm["network"].summary.setText(join("cookies.txt" if src == "file" else
                                            (self.browser.currentText() if src == "browser" else ""),
-                                           "代理" if self.proxy.text().strip() else "",
-                                           f"限速 {self.rate_limit.text().strip()}" if self.rate_limit.text().strip()
-                                           else ""))
+                                           self.tr("代理") if self.proxy.text().strip() else "",
+                                           self.tr("限速 {rate}").format(rate=rate) if rate else ""))
         sm["files"].summary.setText("")
+        for s in sm.values():  # 朗讀程式念分組標題時一併念出摘要（例如「字幕，2 種語言 · SRT」）
+            s.header.setAccessibleName(
+                self.tr("{title}，{summary}").format(title=s.title.text(), summary=s.summary.text())
+                if s.summary.text() else s.title.text())
 
     def _on_preset(self, *_):
         v = self.template_preset.currentData()
@@ -1091,7 +1288,8 @@ class AdvancedOptions(QWidget):
         self._on_changed()
 
     def choose_cookies(self):
-        path, _ = QFileDialog.getOpenFileName(self, "選擇 cookies.txt", "", "Cookie 檔 (*.txt);;所有檔案 (*)")
+        path, _ = QFileDialog.getOpenFileName(self, self.tr("選擇 cookies.txt"), "",
+                                              self.tr("Cookie 檔 (*.txt);;所有檔案 (*)"))
         if path:
             self.upload_cookies(Path(path))
 
@@ -1100,7 +1298,7 @@ class AdvancedOptions(QWidget):
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as e:
-            self.toast(f"無法讀取檔案：{e}", error=True)
+            self.toast(self.tr("無法讀取檔案：{error}").format(error=e), error=True)
             return
         if self.api is None:
             return
@@ -1108,16 +1306,18 @@ class AdvancedOptions(QWidget):
         def ok(r):
             self._on_cookie_status(r)
             self.cookie_source.setCurrentIndex(self.cookie_source.findData("file"))
-            self.toast("已上傳 cookies.txt")
+            self.toast(self.tr("已上傳 cookies.txt"))
             if done:
                 done()
 
-        self.api.post("/api/cookies", {"text": text}, ok, lambda m: self.toast(f"上傳失敗：{m}", error=True))
+        self.api.post("/api/cookies", {"text": text}, ok,
+                      lambda m: self.toast(self.tr("上傳失敗：{error}").format(error=m), error=True))
 
     def remove_cookies(self):
         if self.api is None:
             return
-        self.api.delete("/api/cookies", self._on_cookie_status, lambda m: self.toast(f"移除失敗：{m}", error=True))
+        self.api.delete("/api/cookies", self._on_cookie_status,
+                        lambda m: self.toast(self.tr("移除失敗：{error}").format(error=m), error=True))
 
     # ---------- 外觀 ----------
     def apply_theme(self, t: dict[str, str]):
@@ -1202,9 +1402,9 @@ class AdvancedOptions(QWidget):
         finally:
             self._restoring = False
 
-    def save_settings(self):
+    def save_settings(self, vals: dict | None = None):
         """只寫有變動的值：每個按鍵、每次切換都會呼叫，Windows 上每個值都是一次登錄檔寫入。"""
-        vals = self._values()
+        vals = self._values() if vals is None else vals
         changed = {k: v for k, v in vals.items() if self._saved.get(k, _UNSAVED) != v}
         if not changed:
             return
@@ -1234,6 +1434,56 @@ class AdvancedOptions(QWidget):
         self.settings.endGroup()
 
     def reset(self):
-        """還原預設值（不動目前影片的音軌／字幕／時間範圍選擇）。"""
-        self._set_values(dict(DEFAULTS))
+        """進階選項恢復預設（不動目前影片的音軌／字幕／時間範圍選擇），之後可以 undo_reset() 復原。"""
+        before = self._values()
+        defaults = dict(DEFAULTS)
+        self._set_values(defaults)
+        after = self._values()
+        if after == before:
+            self.toast(self.tr("進階選項已經是預設值"))
+            return
+        self._before_reset, self._reset_values = before, after
         self.changed.emit()  # 會觸發 _on_changed：更新畫面並存檔
+        had_focus = self.reset_btn.hasFocus()
+        self.reset_note.show()
+        self.undo_btn.show()
+        self.reset_btn.hide()
+        if had_focus:
+            self.undo_btn.setFocus(Qt.OtherFocusReason)  # 鍵盤操作的人可以直接按空白鍵復原
+        self._undo_timer.start()
+        self._toast_with_undo(self.tr("已將進階選項恢復預設"))
+
+    def undo_reset(self) -> bool:
+        """復原上一次「進階選項恢復預設」；沒有可以復原的就回傳 False。"""
+        before = self._before_reset
+        if before is None:
+            return False
+        self._drop_undo()
+        self._set_values(before)
+        self.changed.emit()
+        self.toast(self.tr("已復原進階選項"))
+        return True
+
+    def can_undo_reset(self) -> bool:
+        return self._before_reset is not None
+
+    def _drop_undo(self):
+        self._before_reset = None
+        self._undo_timer.stop()
+        had_focus = self.undo_btn.hasFocus()
+        self.reset_note.hide()
+        self.undo_btn.hide()
+        self.reset_btn.show()
+        if had_focus:
+            self.reset_btn.setFocus(Qt.OtherFocusReason)  # 焦點不要掉到看不見的按鈕上
+
+    def _toast_with_undo(self, text: str):
+        """主視窗的 toast 支援 actions 參數（C1 加的）時附上「復原」；舊版只顯示文字（標題列旁也有復原鈕）。"""
+        try:
+            params = inspect.signature(self.toast).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "actions" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            self.toast(text, actions=[(self.tr("復原"), self.undo_reset)])
+        else:
+            self.toast(text)

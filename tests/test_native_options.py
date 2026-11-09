@@ -312,3 +312,259 @@ def test_panel_has_no_own_stylesheet_and_follows_theme(adv):
     adv.sections_edit.setText("2:00-1:00")
     assert tokens(True)["red"] in adv.range_hint.text()
     adv.apply_theme(tokens(False))
+
+
+# --------------------------------------------------------------------------- v1.3：時間範圍訊息
+
+def test_range_error_messages_name_the_bad_part_and_give_example():
+    msg = range_error("0:30-1:00, abc")
+    assert "abc" in msg and "例如：0:30-1:45, 3:00-end" in msg
+    msg = range_error("0:10-0:20, 2:00-1:00")
+    assert "2:00-1:00" in msg and "結束時間比開始時間晚" in msg
+    # 引擎接受的 App 也要接受（規則用同一個解析器）
+    for ok in ("0:30-1:45", "1:00-end", "10-20; 30-40", "1:00:00-1:30:00"):
+        assert range_error(ok) == "", ok
+        server._parse_ranges(ok)
+
+
+# --------------------------------------------------------------------------- v1.3：reveal_section（DL2）
+
+def _in_scroll(adv):
+    from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
+    sc = QScrollArea()
+    sc.setWidgetResizable(True)
+    inner = QWidget()
+    lay = QVBoxLayout(inner)
+    filler = QWidget()
+    filler.setFixedHeight(900)  # 進階選項在頁面下方，要捲才看得到
+    lay.addWidget(filler)
+    lay.addWidget(adv)
+    sc.setWidget(inner)
+    sc.resize(700, 500)
+    sc.show()
+    QApplication.processEvents()
+    return sc
+
+
+@pytest.mark.parametrize("key, section", [("subtitles", "subs"), ("subs", "subs"), ("clip", "clip"),
+                                          ("network", "network"), ("cookies", "network"), ("video", "video")])
+def test_reveal_section_expands_and_scrolls(adv, key, section):
+    sc = _in_scroll(adv)
+    s = adv.sections[section]
+    s.set_expanded(False)
+    assert sc.verticalScrollBar().value() == 0
+    assert adv.reveal_section(key) is True
+    assert s.expanded()
+    QApplication.processEvents()  # 捲動延到下一輪事件
+    top = s.header.mapTo(sc.widget(), s.header.rect().topLeft()).y()
+    view_top = sc.verticalScrollBar().value()
+    assert view_top <= top <= view_top + sc.viewport().height() - s.header.height()
+    sc.close()
+
+
+def test_reveal_section_remembers_expanded(adv, settings):
+    adv.sections["clip"].set_expanded(False)
+    adv.reveal_section("clip")
+    settings.beginGroup("advanced")
+    assert settings.value("open_clip") in (True, "true")
+    settings.endGroup()
+
+
+def test_reveal_section_focus_and_unknown_or_hidden(adv):
+    sc = _in_scroll(adv)
+    sc.activateWindow()
+    assert adv.reveal_section("nope") is False
+    adv.set_mode("thumb")  # 縮圖模式沒有剪輯分組
+    assert adv.reveal_section("clip") is False
+    adv.set_mode("av")
+    assert adv.reveal_section("clip", focus=True) is True
+    assert QApplication.focusWidget() is adv.sections_edit
+    assert adv.reveal_section("files", focus=True) is True  # 沒有主要輸入元件的分組：焦點移到分組標題
+    assert QApplication.focusWidget() is adv.sections["files"].header
+    sc.close()
+
+
+# --------------------------------------------------------------------------- v1.3：無障礙（A11Y1／A11Y2）
+
+def _expanded(adv):
+    for s in adv.sections.values():
+        s.set_expanded(True)
+    adv.cookie_exists = True
+    adv._on_changed()
+    adv.resize(720, 2400)
+    adv.show()
+    QApplication.processEvents()
+
+
+def test_every_focusable_widget_has_a_name(adv):
+    """驗收第 9 點：所有可以取得焦點的元件都要有文字或 accessibleName。"""
+    from PySide6.QtWidgets import QAbstractButton, QWidget
+    _expanded(adv)
+    missing = []
+    for w in adv.findChildren(QWidget):
+        if not w.isVisibleTo(adv) or not (w.focusPolicy() & Qt.TabFocus):
+            continue
+        if w.objectName().startswith("qt_"):  # QLineEdit 的清除鈕這類 Qt 內部元件
+            continue
+        text = w.text() if isinstance(w, QAbstractButton) else ""
+        if not (text or w.accessibleName()):
+            missing.append(f"{type(w).__name__}:{w.objectName()}")
+    adv.close()
+    assert not missing, missing
+
+
+def test_switches_and_rows_are_named(adv):
+    from native_options import Switch
+    switches = adv.findChildren(Switch)
+    assert len(switches) >= 19 and all(sw.accessibleName() for sw in switches)
+    assert adv.recode.accessibleName() == "一律轉檔成選擇的格式"
+    assert "Premium" in adv.premium.accessibleDescription()
+    assert adv.max_fps.accessibleName() == "畫面更新率上限"
+    assert adv.codec.buttons["av01"].accessibleDescription() == "編碼偏好"
+    assert adv.sections_edit.accessibleName() == "時間範圍"
+    assert Switch(False, title="測試").accessibleName() == "測試"
+
+
+def test_section_header_reports_name_and_state(adv):
+    h = adv.sections["subs"].header
+    adv.sections["subs"].set_expanded(False)
+    assert h.accessibleName().startswith("字幕") and "收合" in h.accessibleDescription()
+    adv.sections["subs"].set_expanded(True)
+    assert h.accessibleDescription() == "已展開"
+    adv.subs.set_values({"en"})
+    assert "1 種語言" in h.accessibleName()  # 摘要也一起念
+
+
+def test_chip_reports_checkable_state(adv):
+    from PySide6.QtGui import QAccessible
+    chip = adv.subs.chips["en"]
+    iface = QAccessible.queryAccessibleInterface(chip)
+    assert iface.text(QAccessible.Name) == "English"
+    assert iface.state().checkable and not iface.state().checked
+    chip.click()
+    assert QAccessible.queryAccessibleInterface(chip).state().checked
+    chapter = adv.chapter_flow.itemAt(0).widget()
+    assert not chapter.isCheckable() and "Intro" in chapter.accessibleName()
+
+
+def test_decorations_do_not_take_focus(adv):
+    from native_options import Chevron, Icon
+    for w in adv.findChildren(Icon) + adv.findChildren(Chevron):
+        assert w.focusPolicy() == Qt.NoFocus
+    assert adv.autos_scroll.focusPolicy() == Qt.NoFocus  # 捲動區不是看不見的 Tab 停留點
+
+
+def test_segmented_arrow_keys(adv):
+    """A11Y2：分段控制可以用方向鍵切換（Tab 只停在選中的那顆）。"""
+    from PySide6.QtTest import QTest
+    _expanded(adv)
+    seen = []
+    adv.changed.connect(lambda: seen.append(adv.codec.value()))
+    adv.codec.buttons[""].setFocus()
+    QTest.keyClick(adv.codec.buttons[""], Qt.Key_Right)
+    assert adv.codec.value() == "av01" and adv.codec.buttons["av01"].hasFocus() and seen
+    QTest.keyClick(adv.codec.buttons["av01"], Qt.Key_Left)
+    assert adv.codec.value() == ""
+    adv.close()
+
+
+def test_custom_widgets_size_from_font_metrics(app):
+    """英文較長、文字放大時，自己畫的標籤和開關要跟著變大，不能把字切掉。"""
+    from PySide6.QtGui import QFont
+
+    from native_options import Chip, Switch
+    chip = Chip("Interaction reminder (subscribe)")
+    assert chip.sizeHint().width() >= chip.fontMetrics().horizontalAdvance(chip.text()) + 20
+    big = QFont()
+    big.setPixelSize(32)
+    chip.setFont(big)
+    sw = Switch()
+    sw.setFont(big)
+    assert chip.sizeHint().height() > chip.fontMetrics().height()
+    assert sw.sizeHint().height() > 22 and sw.sizeHint().width() > 38
+
+
+def test_focus_rings_paint(adv):
+    """自繪元件取得焦點時畫 2 px 焦點環（只確認畫得出來、不出錯）。"""
+    _expanded(adv)
+    for w in (adv.recode, adv.subs.chips["en"], adv.sections["video"].header):
+        w.setFocus()
+        assert not w.grab().isNull()
+    adv.close()
+
+
+# --------------------------------------------------------------------------- v1.3：恢復預設＋復原（DL12）
+
+def test_reset_button_names_its_scope(adv):
+    assert adv.reset_btn.text() == "進階選項恢復預設"
+
+
+def test_reset_can_be_undone(adv):
+    adv.embed_metadata.setChecked(False)
+    adv.retries.setValue(3)
+    adv.sb_mark.set_values({"intro"})
+    before = adv.apply(BASE)
+    adv.reset()
+    assert adv.can_undo_reset() and adv.undo_btn.isVisibleTo(adv) and not adv.reset_btn.isVisibleTo(adv)
+    assert adv.apply(BASE)["extras"]["retries"] == 10
+    assert adv.undo_reset() is True
+    assert adv.apply(BASE) == before
+    assert not adv.can_undo_reset() and adv.reset_btn.isVisibleTo(adv) and not adv.undo_btn.isVisibleTo(adv)
+    assert adv.undo_reset() is False
+
+
+def test_keyboard_reset_moves_focus_to_undo(adv):
+    adv.show()
+    adv.activateWindow()
+    adv.retries.setValue(3)
+    adv.reset_btn.setFocus()
+    QApplication.processEvents()
+    assert QApplication.focusWidget() is adv.reset_btn
+    adv.reset()
+    assert QApplication.focusWidget() is adv.undo_btn
+    adv.undo_reset()
+    assert QApplication.focusWidget() is adv.reset_btn  # 復原鈕消失後焦點回到恢復預設
+    adv.close()
+
+
+def test_undo_is_dropped_after_a_new_change(adv):
+    adv.retries.setValue(3)
+    adv.reset()
+    assert adv.can_undo_reset()
+    adv.premium.setChecked(True)  # 恢復預設後又改了：不能再復原（會蓋掉新的修改）
+    assert not adv.can_undo_reset() and adv.reset_btn.isVisibleTo(adv)
+
+
+def test_undo_expires(adv):
+    adv.retries.setValue(3)
+    adv.reset()
+    adv._undo_timer.timeout.emit()
+    assert not adv.can_undo_reset()
+
+
+def test_reset_when_already_default_offers_no_undo(app, settings):
+    msgs = []
+    w = AdvancedOptions(settings=settings, toast=lambda text, **_k: msgs.append(text))
+    w.reset()
+    assert not w.can_undo_reset() and msgs == ["進階選項已經是預設值"]
+
+
+def test_reset_toast_has_undo_action_when_supported(app, settings):
+    calls = []
+
+    def toast(text, level="info", actions=None):
+        calls.append((text, actions))
+
+    w = AdvancedOptions(settings=settings, toast=toast)
+    w.retries.setValue(3)
+    w.reset()
+    text, actions = calls[-1]
+    assert text == "已將進階選項恢復預設" and actions and actions[0][0] == "復原"
+    actions[0][1]()
+    assert w.retries.value() == 3
+
+    old = []
+    w2 = AdvancedOptions(settings=settings, toast=lambda text, error=False: old.append(text))  # 舊版 toast
+    w2.retries.setValue(4)
+    w2.reset()
+    assert old[-1] == "已將進階選項恢復預設"
