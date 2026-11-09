@@ -138,6 +138,11 @@ _ERRORS: dict[str, dict] = {
         "en": "FFmpeg can't be found. Check its status in Settings.",
         "action": None, "faq": "err-ffmpeg-missing",
     },
+    "server_error": {
+        "zh": "網站暫時無法回應（伺服器錯誤），請過幾分鐘再試",
+        "en": "The website isn't responding right now (server error). Please try again in a few minutes.",
+        "action": "retry", "faq": "err-network",
+    },
     "network_dns": {
         "zh": "無法連線到網站，請確認網路連線",
         "en": "Can't reach the website. Please check your internet connection.",
@@ -198,7 +203,7 @@ ERROR_CODES: tuple[str, ...] = tuple(_ERRORS)
 # 依序比對：越具體、越容易被別的關鍵字誤判的放越前面。
 # 例：Proxy 失敗的原文常含「timed out」，要排在 network_timeout 前；
 # 「Sign in to confirm your age」也含「Sign in to confirm you」，年齡限制要排在機器人驗證前。
-_RULES: list[tuple[str, tuple[type, ...], tuple[str, ...]]] = [
+_RULES: list[tuple[str, tuple[type, ...], tuple[str | re.Pattern, ...]]] = [
     ("disk_full", (), ("errno 28", "no space left", "磁碟空間不足", "not enough space on the disk",
                        "there is not enough space")),
     ("cookies_invalid", (), ("netscape format", "netscape formatted", "cookies file must be")),
@@ -225,6 +230,8 @@ _RULES: list[tuple[str, tuple[type, ...], tuple[str, ...]]] = [
                                 "no video formats found")),
     ("rate_limited", (), ("http error 429", "too many requests")),
     ("http_403", (), ("http error 403", "403: forbidden", "403 forbidden")),
+    # yt-dlp 的 HTTPError 一律寫成「HTTP Error 5xx: …」；不比對裸的「internal server error」，那是引擎自己的 Flask 500
+    ("server_error", (), (re.compile(r"http error 5\d\d\b"), "503: service unavailable", "502: bad gateway")),
     ("network_dns", (), ("getaddrinfo failed", "failed to resolve", "name or service not known",
                          "nodename nor servname", "temporary failure in name resolution", "errno 11001",
                          "errno -2", "errno -3", "name resolution", "no address associated with hostname")),
@@ -321,6 +328,10 @@ def _location_label(location) -> str | None:
     return None
 
 
+def _hit(keyword: str | re.Pattern, text: str) -> bool:
+    return bool(keyword.search(text)) if isinstance(keyword, re.Pattern) else keyword in text
+
+
 def classify(exc_or_message) -> str:
     """只回傳錯誤代碼（附錄 A）。"""
     if isinstance(exc_or_message, BaseException):
@@ -330,7 +341,7 @@ def classify(exc_or_message) -> str:
     text = _haystack(chain) if chain else _ANSI.sub("", str(exc_or_message or "")).lower()
 
     for code, types, keywords in _RULES:
-        if (types and any(isinstance(e, types) for e in chain)) or any(k in text for k in keywords):
+        if (types and any(isinstance(e, types) for e in chain)) or any(_hit(k, text) for k in keywords):
             if code == "download_dir_unavailable" and "cookie" in text:
                 continue  # cookies.txt 讀不到不是儲存位置的問題；落到 unknown，原文留在 detail
             return code
@@ -429,6 +440,19 @@ _STAGES: dict[str, dict[str, str]] = {
     "interrupted": {"zh": "已中斷", "en": "Interrupted"},
     "disk_full": {"zh": "磁碟空間不足", "en": "Disk full"},
     "config_error": {"zh": "設定錯誤", "en": "Settings error"},
+    "waiting_network": {"zh": "網路中斷，{s} 秒後重試（{attempt}/{max}）",
+                        "en": "Connection lost, retrying in {s} s ({attempt}/{max})"},
+    "done_partial": {"zh": "完成 {done}/{total}", "en": "Done {done}/{total}"},
+    "pausing": {"zh": "暫停中…", "en": "Pausing…"},
+    "download_dir_unavailable": {"zh": "儲存位置無法存取", "en": "Download location unavailable"},
+}
+
+# 有參數的階段缺參數時顯示的文字（不能把 {done} 之類的佔位符露出來，也不能和別的階段撞字）
+_STAGE_BARE: dict[str, dict[str, str]] = {
+    "downloading_format": {"zh": "下載中", "en": "Downloading"},
+    "reconnecting": {"zh": "重新連線中", "en": "Reconnecting"},
+    "waiting_network": {"zh": "網路中斷，等待重試", "en": "Connection lost, waiting to retry"},
+    "done_partial": {"zh": "部分完成", "en": "Partly done"},
 }
 
 STAGE_CODES: tuple[str, ...] = tuple(_STAGES)
@@ -448,8 +472,10 @@ def stage_text(stage_code: str, lang: str = "zh", **params) -> str:
 
     - ``downloading``：可帶 ``format_id``（例如 ``"137"``），有值時顯示「下載中 137」。
     - ``reconnecting``：需要 ``attempt`` 與 ``max``（例如 1、3 → 「重新連線中（1/3）」）。
+    - ``waiting_network``：需要 ``s``（秒）、``attempt``、``max``。
+    - ``done_partial``：需要 ``done``、``total``（例如 3、5 → 「完成 3/5」）。
     - ``postprocessing``：可帶 ``name``（yt-dlp 的後處理名稱，例如 ``"Merger"``），會換成中英文步驟名稱。
-    - 不認得的代碼原樣回傳。
+    - 缺參數時顯示不含數字的文字（``_STAGE_BARE``）；不認得的代碼原樣回傳。
     """
     lang = normalize_lang(lang)
     if stage_code == "postprocessing":
@@ -463,4 +489,4 @@ def stage_text(stage_code: str, lang: str = "zh", **params) -> str:
     try:
         return template.format(**params)
     except (KeyError, IndexError, ValueError):
-        return re.sub(r"[（(]?\{[^}]*\}[^）)]*[）)]?", "", template).strip() or template
+        return _STAGE_BARE[stage_code][lang]

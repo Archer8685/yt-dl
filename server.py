@@ -301,15 +301,7 @@ ENGINE_TEXT: dict[str, dict[str, str]] = {
     "steps_failed": {"zh": "部分步驟失敗：{reason}", "en": "Some steps failed: {reason}"},
 }
 
-# engine_messages 沒有的處理階段（第二階段回報給 E2，之後可以搬過去）
-EXTRA_STAGES: dict[str, dict[str, str]] = {
-    "waiting_network": {"zh": "網路中斷，{s} 秒後重試（{attempt}/{max}）",
-                        "en": "Connection lost, retrying in {s} s ({attempt}/{max})"},
-    "done_partial": {"zh": "完成 {done}/{total}", "en": "Done {done}/{total}"},
-    "pausing": {"zh": "暫停中…", "en": "Pausing…"},
-    "download_dir_unavailable": {"zh": "儲存位置無法存取", "en": "Download location unavailable"},
-}
-STAGE_CODES = (*em.STAGE_CODES, *EXTRA_STAGES)
+STAGE_CODES = em.STAGE_CODES
 # 第一階段（e11a991）存在 job.json 的階段代碼 → 現在的代碼
 _STAGE_ALIASES = {"error": "failed", "done_warnings": "done_with_warnings", "downloaded": "download_finished",
                   "processing": "postprocessing", "downloading_format": "downloading"}
@@ -355,14 +347,7 @@ def engine_text(key: str, lang: str = "zh", **args) -> str:
 
 
 def render_stage(code: str, params: dict | None, lang: str = "zh") -> str:
-    params = params or {}
-    if code in EXTRA_STAGES:
-        template = EXTRA_STAGES[code][em.normalize_lang(lang)]
-        try:
-            return template.format(**params)
-        except (KeyError, IndexError, ValueError):  # 缺參數時去掉數字部分，不要把 {done} 顯示出來
-            return re.sub(r"\s*[（(]?\{[^}]*\}.*$", "", template).strip(" ，,") or template
-    return em.stage_text(code, lang, **params)
+    return em.stage_text(code, lang, **(params or {}))
 
 
 def render_error(code: str, params: dict | None, lang: str = "zh") -> dict:

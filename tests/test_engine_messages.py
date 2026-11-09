@@ -111,6 +111,13 @@ SAMPLES: dict[str, list] = {
         "--ffmpeg-location"),
         "ERROR: You have requested downloading the video partially, but ffmpeg is not installed. Aborting",
     ],
+    "server_error": [
+        ("ERROR: [youtube] abcdefghijk: Unable to download API page: HTTP Error 503: Service Unavailable "
+        "(caused by <HTTPError 503: Service Unavailable>)"),
+        "ERROR: unable to download video data: HTTP Error 502: Bad Gateway",
+        ("ERROR: [generic] Unable to download webpage: HTTP Error 500: Internal Server Error "
+        "(caused by <HTTPError 500: Internal Server Error>)"),
+    ],
     "network_dns": [
         ("ERROR: [youtube] abcdefghijk: Unable to download webpage: HTTPSConnection(host='www.youtube.com', "
         "port=443): Failed to resolve 'www.youtube.com' ([Errno 11001] getaddrinfo failed) "
@@ -252,6 +259,7 @@ def test_appendix_a_actions_and_anchors():
         "format_unavailable": ("reanalyze", "err-format-unavailable"),
         "ffmpeg_failed": (None, "err-ffmpeg-failed"),
         "ffmpeg_missing": (None, "err-ffmpeg-missing"),
+        "server_error": ("retry", "err-network"),
         "network_dns": ("retry", "err-network"),
         "network_timeout": ("retry", "err-network"),
         "proxy_error": ("open_network_settings", "err-proxy"),
@@ -402,7 +410,33 @@ def test_unknown_code_payload_falls_back():
 # 處理階段文字
 # ---------------------------------------------------------------------------
 
-STAGE_PARAMS = {"reconnecting": {"attempt": 1, "max": 3}, "downloading_format": {"format_id": "137"}}
+STAGE_PARAMS = {"reconnecting": {"attempt": 1, "max": 3}, "downloading_format": {"format_id": "137"},
+                "waiting_network": {"s": 10, "attempt": 1, "max": 5}, "done_partial": {"done": 3, "total": 5}}
+
+
+def test_new_stages_text():
+    assert stage_text("waiting_network", s=10, attempt=2, max=5) == "網路中斷，10 秒後重試（2/5）"
+    assert stage_text("waiting_network", "en", s=10, attempt=2, max=5) == "Connection lost, retrying in 10 s (2/5)"
+    assert stage_text("done_partial", done=3, total=5) == "完成 3/5"
+    assert stage_text("done_partial", "en", done=3, total=5) == "Done 3/5"
+    assert stage_text("pausing") == "暫停中…"
+    assert stage_text("pausing", "en") == "Pausing…"
+    assert stage_text("download_dir_unavailable") == "儲存位置無法存取"
+    assert stage_text("download_dir_unavailable", "en") == "Download location unavailable"
+
+
+@pytest.mark.parametrize("code", STAGE_CODES)
+@pytest.mark.parametrize("lang", ["zh", "en"])
+def test_stage_without_params_never_shows_placeholder(code, lang):
+    text = stage_text(code, lang)
+    assert text.strip() and "{" not in text and "}" not in text
+
+
+def test_bare_stage_texts_do_not_collide():
+    """缺參數時的文字不能和別的階段一樣（server 用中文文字反查舊 job.json 的階段代碼）。"""
+    for lang in ("zh", "en"):
+        texts = [stage_text(c, lang) for c in STAGE_CODES if c != "downloading_format"]
+        assert len(texts) == len(set(texts)), texts
 
 
 @pytest.mark.parametrize("code", STAGE_CODES)
