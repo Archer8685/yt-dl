@@ -1500,7 +1500,7 @@
 <context>
     <name>MainWindow</name>
     <message>
-        <location filename="../native_app.py" line="+224"/>
+        <location filename="../native_app.py" line="+232"/>
         <source>{page}（{key}）</source>
         <translation>{page} ({key})</translation>
     </message>
@@ -2630,7 +2630,7 @@ Downloading and analyzing aren&apos;t available right now. Click “Retry”; if
 <context>
     <name>native_app</name>
     <message>
-        <location filename="../native_app.py" line="-619"/>
+        <location filename="../native_app.py" line="-627"/>
         <source>新增下載</source>
         <translation>Add Download</translation>
     </message>
@@ -2655,7 +2655,7 @@ Downloading and analyzing aren&apos;t available right now. Click “Retry”; if
         <translation>Settings</translation>
     </message>
     <message>
-        <location line="+867"/>
+        <location line="+875"/>
         <source>連接埠 {port} 可能被其他程式佔用，請關閉佔用的程式後重新啟動 App</source>
         <translation>Port {port} may be in use by another program. Close that program and restart the app</translation>
     </message>

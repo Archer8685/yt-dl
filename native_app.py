@@ -92,6 +92,14 @@ PAGES = [(QT_TRANSLATE_NOOP("native_app", "新增下載"), "download",
           QT_TRANSLATE_NOOP("native_app", "關閉視窗後，下次開啟可以接著下載")),
          (QT_TRANSLATE_NOOP("native_app", "設定"), "gear", "")]
 GEOMETRY_KEY = "ui/window_geometry"  # SET9：視窗大小、位置
+# 視窗最小尺寸。macOS 的系統字型較寬，英文介面在 720 寬時「新增下載」「設定」頁會被撐出橫向捲軸
+# （CI 實測內容 547／577px > 可視 502px），所以 macOS 放寬到 800；其他平台維持 720。
+def min_window_width(is_mac: bool = IS_MAC) -> int:
+    return 800 if is_mac else 720
+
+
+MIN_WINDOW_WIDTH = min_window_width()
+MIN_WINDOW_HEIGHT = 520
 TRAY_HINT_KEY = "ui/tray_hint_shown"  # 第一次縮到系統匣時的通知只顯示一次
 TOAST_MS, TOAST_ACTION_MS = 4000, 10000  # 一般提示幾秒後自動消失；有按鈕的久一點。錯誤要手動關閉（ERR8）
 # 每分鐘看一次 /api/meta：儲存位置還能不能用（執行中拔掉外接硬碟）、yt-dlp 有沒有新版（引擎在背景下載）
@@ -176,7 +184,7 @@ class MainWindow(QMainWindow):
         self._ytdlp_update = False
         self.setWindowTitle(app_title())
         self.resize(1000, 700)
-        self.setMinimumSize(720, 520)
+        self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
         self.setAcceptDrops(True)  # F4：網址文字、.txt 檔拖到視窗任何地方都可以
         root = QWidget()
         h = QHBoxLayout(root)

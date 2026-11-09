@@ -1,4 +1,5 @@
-"""最小視窗（720×520）時，中文和英文介面每一頁的內容都不能比可視寬度寬（驗收第 13 點：英文較長時版面不破）。
+"""最小視窗（Windows 720×520、macOS 800×520，見 native_app.MIN_WINDOW_WIDTH）時，
+中文和英文介面每一頁的內容都不能比可視寬度寬（驗收第 13 點：英文較長時版面不破）。
 
 英文用已編譯的 i18n/yt_dl_en.qm；測試結束後 i18n.uninstall() 換回原文，不影響其他測試。
 """
@@ -96,6 +97,17 @@ def test_settings_page_fits(win):
     win.go(2)
     wait()
     assert overflow(win.settings) == []
+
+
+@pytest.mark.parametrize("is_mac, width", [(True, 800), (False, 720)])
+def test_minimum_window_width_per_platform(is_mac, width):
+    """macOS 的系統字型較寬，英文介面在 720 寬時會撐出橫向捲軸：macOS 最小寬度 800，其他平台 720。"""
+    assert na.min_window_width(is_mac) == width
+    assert na.MIN_WINDOW_WIDTH == na.min_window_width(nc.IS_MAC)
+
+
+def test_window_uses_minimum_size(win):
+    assert (win.minimumWidth(), win.minimumHeight()) == (na.MIN_WINDOW_WIDTH, na.MIN_WINDOW_HEIGHT)
 
 
 # --------------------------------------------------------------------------- 個別修正
