@@ -281,11 +281,14 @@ def test_rate_meter_smooths_bursty_chunks():
 
 
 def test_postprocessor_labels_with_and_without_ffmpeg_prefix():
-    assert server._pp_label("VideoRemuxer") == "重新封裝容器"
-    assert server._pp_label("FFmpegVideoRemuxer") == "重新封裝容器"
-    assert server._pp_label("Merger") == "合併影音軌"
-    assert server._pp_label("SomethingNew") == "SomethingNew"
-    assert server._pp_label(None) == "後處理"
+    def label(name, lang="zh"):
+        return server.render_stage("postprocessing", {"name": name}, lang)
+    assert label("VideoRemuxer") == "重新封裝容器"
+    assert label("FFmpegVideoRemuxer") == "重新封裝容器"
+    assert label("Merger") == "合併影音軌"
+    assert label("Merger", "en") == "Merging video and audio"
+    assert label("SomethingNew") == "SomethingNew"
+    assert label(None) == "後處理"
 
 
 def test_ffmpeg_steps_skip_faststart_rewrite():
@@ -344,7 +347,8 @@ def test_postprocess_progress_follows_output_file(tmp_path):
     out = tmp / "a.temp.mp4"
     out.write_bytes(b"x" * 900)
     server.os.utime(out, (1, 1))  # 上次中斷殘留的舊暫存檔
-    job.status, job.stage = "processing", "合併影音軌"
+    job.status = "processing"
+    job.set_stage("postprocessing", name="Merger")
     server._pp_start(job, {"filepath": str(tmp / "a.mp4"),
                            "__files_to_merge": [str(tmp / "a.f401.mp4"), str(tmp / "a.f251.webm")]})
     assert job.pp_out == out and job.pp_total == 1000

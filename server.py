@@ -23,8 +23,9 @@ import zipfile
 from collections import deque
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, abort, has_request_context, jsonify, request, send_file, send_from_directory
 
+import engine_messages as em
 import ytdlp_update
 
 APP_NAME = "YT-Downloader"
@@ -103,7 +104,7 @@ def get_download_dir() -> Path:
     """下載位置：環境變數 > settings.json > 專案內 downloads/。
 
     資料夾建立失敗（例如外接硬碟拔掉、磁碟代號不存在）時不丟例外，照樣回傳路徑；
-    要不要擋下動作由 download_dir_error() 決定，App 才打得開、也能提示使用者更換位置。
+    要不要擋下動作由 download_dir_problem() 決定，App 才打得開、也能提示使用者更換位置。
     """
     raw = os.environ.get("YTDL_DOWNLOAD_DIR") or _load_settings().get("download_dir")
     d = Path(raw).expanduser() if raw else DEFAULT_DOWNLOAD_DIR
@@ -114,16 +115,24 @@ def get_download_dir() -> Path:
     return d
 
 
-def download_dir_error(d: Path | None = None) -> str | None:
-    """下載資料夾目前無法使用時回傳說明，可以用時回傳 None。"""
+def download_dir_problem(d: Path | None = None) -> str | None:
+    """下載資料夾目前無法使用時回傳原因（作業系統的原文），可以用時回傳 None。"""
     d = d or get_download_dir()
     try:
         d.mkdir(parents=True, exist_ok=True)
         if not d.is_dir():
             raise NotADirectoryError(str(d))
     except OSError as e:
-        return f"儲存位置 {d} 目前無法存取（{e.strerror or e.__class__.__name__}），請確認磁碟已接上或更換儲存位置。"
+        return f"{d}: {e.strerror or e.__class__.__name__}"
     return None
+
+
+def download_dir_status(d: Path, lang: str | None = None) -> dict:
+    """給 /api/meta、/api/settings：download_dir_error（依語言的說明或 None）與原因原文。只檢查資料夾一次。"""
+    problem = download_dir_problem(d)
+    text = render_error("download_dir_unavailable", error_params(problem, location=d),
+                        lang or req_lang())["error"] if problem else None
+    return {"download_dir_error": text, "download_dir_error_detail": problem}
 
 
 def disk_info(path: Path) -> dict:
@@ -177,7 +186,7 @@ def _cors_preflight():
     origin = request.headers.get("Origin")
     if origin and request.method != "GET" and not _origin_allowed(origin) \
             and origin != request.host_url.rstrip("/"):
-        return api_error("此來源未被允許", 403, action=None)
+        return api_error("unknown", 403, msg="origin_forbidden", action=None)
 
 
 @app.after_request
@@ -195,82 +204,225 @@ def _cors_headers(resp):
 
 
 # --------------------------------------------------------------------------- #
-#  錯誤物件（第 5.5 節的格式）
-#  第一階段：代碼用下面的暫時對照表判斷，`error` 維持原本的中文或 yt-dlp 原文。
-#  第二階段（E2 的 engine_messages.py 合併後）：改由 friendly_error() 判斷並依 Accept-Language 組成文字。
+#  錯誤物件與處理階段文字（第 5.5 節）
+#  錯誤代碼與一般訊息來自 engine_messages（E2）；含數字的詳細說明、操作限制等引擎自己的訊息放在 ENGINE_TEXT。
+#  工作只存「代碼＋參數」，回應時才依請求的 Accept-Language 組成文字（en 開頭用英文，其他與沒帶標頭用中文），
+#  所以切換語言後舊工作的訊息也會跟著變。
 # --------------------------------------------------------------------------- #
-# 代碼 → (下一步動作, USER_GUIDE 錨點)；代碼與錨點照 ROADMAP 附錄 A
-ERROR_META = {
-    "invalid_url": (None, "err-invalid-url"),
-    "unsupported_url": (None, "err-unsupported-url"),
-    "video_unavailable": (None, "err-video-unavailable"),
-    "private_video": ("open_cookie_settings", "err-private-video"),
-    "age_restricted": ("open_cookie_settings", "err-age-restricted"),
-    "members_only": ("open_cookie_settings", "err-members-only"),
-    "geo_blocked": (None, "err-geo-blocked"),
-    "bot_check": ("open_cookie_settings", "err-bot-check"),
-    "live_not_started": (None, "err-live-not-started"),
-    "http_403": ("resume", "err-http-403"),
-    "rate_limited": ("retry", "err-rate-limited"),
-    "format_unavailable": ("reanalyze", "err-format-unavailable"),
-    "ffmpeg_failed": (None, "err-ffmpeg-failed"),
-    "ffmpeg_missing": (None, "err-ffmpeg-missing"),
-    "network_dns": ("retry", "err-network"),
-    "network_timeout": ("retry", "err-network"),
-    "proxy_error": ("open_network_settings", "err-proxy"),
-    "cookie_browser_locked": ("open_cookie_settings", "err-cookie-browser"),
-    "cookies_invalid": ("open_cookie_settings", "err-cookies-invalid"),
-    "disk_full": ("open_storage_settings", "err-disk-full"),
-    "download_dir_unavailable": ("open_storage_settings", "err-download-dir"),
-    "engine_internal": ("retry", "err-engine"),
-    "unknown": ("retry", "err-unknown"),
+ENGINE_TEXT: dict[str, dict[str, str]] = {
+    "origin_forbidden": {"zh": "此來源未被允許",
+                         "en": "This website isn't allowed to control the downloader."},
+    "not_found": {"zh": "找不到指定的工作或檔案", "en": "The job or file wasn't found."},
+    "too_large": {"zh": "上傳的檔案太大", "en": "The uploaded file is too large."},
+    "http_error": {"zh": "無法處理這個要求（{http}）", "en": "The request couldn't be handled ({http})."},
+    "youtube_incomplete": {"zh": "YouTube 網址不完整，請複製完整的影片網址",
+                           "en": "This YouTube link is incomplete. Copy the full video link."},
+    "range_format": {"zh": "時間範圍格式錯誤：{chunk}（例：1:30-2:45）",
+                     "en": "Invalid time range: {chunk} (example: 1:30-2:45)"},
+    "range_invalid": {"zh": "時間範圍無效：{chunk}", "en": "Invalid time range: {chunk}"},
+    "options_invalid": {"zh": "下載選項有誤，請檢查進階選項", "en": "Some download options are invalid. Check Advanced options."},
+    "pause_not_allowed": {"zh": "只有下載中或排隊中的工作可以暫停",
+                          "en": "Only downloading or queued jobs can be paused."},
+    "resume_not_allowed": {"zh": "只有失敗、中斷或暫停的工作可以繼續",
+                           "en": "Only failed, interrupted or paused jobs can be resumed."},
+    "retry_failed_none": {"zh": "這個工作沒有可以重試的失敗項目", "en": "This job has no failed items to retry."},
+    "delete_files_param": {"zh": "files 參數只能是 keep 或 trash", "en": "The files parameter must be keep or trash."},
+    "job_busy": {"zh": "工作進行中，請先暫停或取消", "en": "This job is still running. Pause or cancel it first."},
+    "trash_unavailable": {"zh": "這台電腦無法使用資源回收筒，檔案沒有刪除",
+                          "en": "The Recycle Bin isn't available on this computer. No files were deleted."},
+    "trash_failed": {"zh": "無法把檔案移到資源回收筒，檔案沒有刪除",
+                     "en": "Couldn't move the files to the Recycle Bin. No files were deleted."},
+    "parallel_range": {"zh": "同時下載數要介於 {lo} 到 {hi} 之間",
+                       "en": "Simultaneous downloads must be between {lo} and {hi}."},
+    "dir_env_locked": {"zh": "儲存位置由環境變數 YTDL_DOWNLOAD_DIR 指定，無法在這裡修改",
+                       "en": "The download location is set by the YTDL_DOWNLOAD_DIR environment variable "
+                             "and can't be changed here."},
+    "dir_not_absolute": {"zh": "請輸入完整路徑，例如 D:\\Videos\\yt", "en": "Enter a full path, for example D:\\Videos\\yt"},
+    "settings_save_failed": {"zh": "無法儲存設定", "en": "Couldn't save the settings."},
+    "update_running": {"zh": "更新進行中", "en": "An update is already running."},
+    "update_busy": {"zh": "有下載工作進行中，請完成後再更新", "en": "Downloads are in progress. Update after they finish."},
+    "cookie_source_missing": {"zh": "尚未設定 Cookie 來源", "en": "No cookie source is set."},
+    "browser_cookies_locked": {
+        "zh": "無法讀取 {browser} 的 Cookie：Windows 上新版 Chromium 系瀏覽器會加密／鎖定 Cookie。"
+              "請完全關閉該瀏覽器再試，或改用 Firefox，或改用 cookies.txt 方式。",
+        "en": "Can't read {browser}'s cookies: recent Chromium-based browsers on Windows encrypt or lock them. "
+              "Close the browser completely and try again, or use Firefox or a cookies.txt file instead."},
+    "browser_cookies_not_found": {
+        "zh": "找不到 {browser} 的 Cookie 資料庫，請確認已安裝並登入過 YouTube。",
+        "en": "Couldn't find {browser}'s cookie database. Make sure it's installed and you've signed in to YouTube."},
+    "disk_full_download": {
+        "zh": "磁碟空間不足：{anchor} 只剩 {free}（保留 {reserve} 給系統）。已停止下載，已完成的檔案會保留。"
+              "請到「設定 → 儲存位置」改到空間較大的磁碟，或降低畫質、減少清單項目。",
+        "en": "Not enough disk space: only {free} left on {anchor} ({reserve} is kept free for the system). "
+              "The download stopped; finished files were kept. Choose a drive with more space in "
+              "Settings → Storage location, or pick a lower quality or fewer playlist items."},
+    "disk_full_download_need": {
+        "zh": "磁碟空間不足：{anchor} 只剩 {free}，這個檔案還需要約 {need}（保留 {reserve} 給系統）。"
+              "已停止下載，已完成的檔案會保留。請到「設定 → 儲存位置」改到空間較大的磁碟，或降低畫質、減少清單項目。",
+        "en": "Not enough disk space: only {free} left on {anchor}, and this file still needs about {need} "
+              "({reserve} is kept free for the system). The download stopped; finished files were kept. "
+              "Choose a drive with more space in Settings → Storage location, or pick a lower quality "
+              "or fewer playlist items."},
+    "disk_full_start": {
+        "zh": "磁碟空間不足：{anchor} 只剩 {free}，未開始下載。請清出空間，或到「設定 → 儲存位置」更換。",
+        "en": "Not enough disk space: only {free} left on {anchor}, so the download didn't start. "
+              "Free up space or change the location in Settings → Storage location."},
+    "disk_full_pp": {
+        "zh": "磁碟空間不足：「{step}」需要約 {need}，{anchor} 只剩 {free}（保留 {reserve} 給系統）。"
+              "已下載的部分會保留，清出空間或到「設定 → 儲存位置」更換後按「繼續下載」。",
+        "en": "Not enough disk space: “{step}” needs about {need}, but only {free} is left on {anchor} "
+              "({reserve} is kept free for the system). The downloaded data was kept. Free up space or change "
+              "the location in Settings → Storage location, then click “Resume”."},
+    "disk_full_generic": {
+        "zh": "磁碟空間不足（{anchor} 只剩 {free}），下載已停止。請到「設定 → 儲存位置」改到空間較大的磁碟，"
+              "或降低畫質、減少清單項目。",
+        "en": "Not enough disk space (only {free} left on {anchor}), so the download stopped. Choose a drive "
+              "with more space in Settings → Storage location, or pick a lower quality or fewer playlist items."},
+    "files_kept": {"zh": "已保留完成的 {n} 個檔案。", "en": "{n} finished file(s) were kept."},
+    "interrupted": {
+        "zh": "下載引擎在下載途中被關閉，工作已中斷。按「繼續下載」會從中斷處接著下載。",
+        "en": "The download engine was closed during the download, so the job was interrupted. "
+              "Click “Resume” to continue where it stopped."},
+    "interrupted_size": {
+        "zh": "下載引擎在下載途中被關閉，工作已中斷。按「繼續下載」會從中斷處接著下載（已下載 {size}）。",
+        "en": "The download engine was closed during the download, so the job was interrupted. "
+              "Click “Resume” to continue where it stopped ({size} already downloaded)."},
+    "playlist_all_failed": {"zh": "清單中的 {n} 部影片都無法下載：{reason}",
+                            "en": "None of the {n} videos in the playlist could be downloaded: {reason}"},
+    "no_media": {"zh": "下載失敗：沒有產生影片或音訊檔，可以展開「詳細資訊」查看原因",
+                 "en": "The download failed: no video or audio file was produced. Open “Details” to see why."},
+    "no_subs": {"zh": "下載失敗：沒有產生字幕檔（這部影片可能沒有所選語言的字幕）",
+                "en": "The download failed: no subtitle file was produced "
+                      "(the video may not have subtitles in the selected languages)."},
+    "no_thumb": {"zh": "下載失敗：沒有產生縮圖", "en": "The download failed: no thumbnail was produced."},
+    "done_partial": {"zh": "完成 {done}/{total}，{n} 部無法下載",
+                     "en": "Done {done}/{total}; {n} couldn't be downloaded"},
+    "items_failed": {"zh": "{n} 部無法下載", "en": "{n} couldn't be downloaded"},
+    "steps_failed": {"zh": "部分步驟失敗：{reason}", "en": "Some steps failed: {reason}"},
 }
 
-# 暫時的關鍵字對照（由上往下比對，先比對到的優先）；第二階段由 engine_messages.friendly_error 取代
-_ERROR_PATTERNS: list[tuple[str, str]] = [
-    ("disk_full", r"Errno 28|No space left"),
-    ("proxy_error", r"Unable to connect to proxy|ProxyError"),
-    ("cookie_browser_locked", r"cookie database|Could not copy Chrome cookie|DPAPI"),
-    ("cookies_invalid", r"Netscape format cookies"),
-    ("private_video", r"Private video"),
-    ("age_restricted", r"confirm your age|age[- ]restricted"),
-    ("members_only", r"members-only|Join this channel"),
-    ("geo_blocked", r"not available in your country|geo restriction|geo-restricted"),
-    ("bot_check", r"not a bot|Sign in to confirm you"),
-    ("live_not_started", r"live event will begin|Premieres in"),
-    ("http_403", r"HTTP Error 403"),
-    ("rate_limited", r"HTTP Error 429|Too Many Requests"),
-    ("format_unavailable", r"Requested format is not available"),
-    ("ffmpeg_missing", r"ffmpeg is not installed|ffmpeg not found|ffprobe and ffmpeg not found"),
-    ("ffmpeg_failed", r"Conversion failed|ffmpeg exited with code|Postprocessing:"),
-    ("network_dns", (r"getaddrinfo|Failed to resolve|Name or service not known|"
-                     r"Temporary failure in name resolution|nodename nor servname")),
-    ("network_timeout", (r"timed out|TransportError|Connection reset|Connection aborted|Connection refused|"
-                         r"Network is unreachable|RemoteDisconnected|IncompleteRead|HTTP Error 5\d\d")),
-    ("unsupported_url", r"Unsupported URL|No suitable extractor"),
-    ("video_unavailable", r"video is unavailable|Video unavailable|This video is not available"),
-]
+# engine_messages 沒有的處理階段（第二階段回報給 E2，之後可以搬過去）
+EXTRA_STAGES: dict[str, dict[str, str]] = {
+    "waiting_network": {"zh": "網路中斷，{s} 秒後重試（{attempt}/{max}）",
+                        "en": "Connection lost, retrying in {s} s ({attempt}/{max})"},
+    "done_partial": {"zh": "完成 {done}/{total}", "en": "Done {done}/{total}"},
+    "pausing": {"zh": "暫停中…", "en": "Pausing…"},
+    "download_dir_unavailable": {"zh": "儲存位置無法存取", "en": "Download location unavailable"},
+}
+STAGE_CODES = (*em.STAGE_CODES, *EXTRA_STAGES)
+# 第一階段（e11a991）存在 job.json 的階段代碼 → 現在的代碼
+_STAGE_ALIASES = {"error": "failed", "done_warnings": "done_with_warnings", "downloaded": "download_finished",
+                  "processing": "postprocessing", "downloading_format": "downloading"}
+_ZH_STAGE_TO_CODE = {em.stage_text(c, "zh"): c for c in em.STAGE_CODES if "{" not in em.stage_text(c, "zh")}
+_NO_ACTION = "__default__"
 
 
-def classify_error(text: str) -> str:
-    for code, pat in _ERROR_PATTERNS:
-        if re.search(pat, text or "", re.IGNORECASE):
-            return code
-    return "unknown"
+def req_lang() -> str:
+    """這個請求要用的語言：Accept-Language 以 en 開頭 → "en"；其他或沒帶 → "zh"。
+
+    瀏覽器一定會自動帶 Accept-Language，網頁版（中文介面）卻要維持中文（第 5.3 節第 4 點），
+    所以瀏覽器發出的請求（有 Sec-Fetch-* 標頭）一律用中文；桌面 App 的 Qt 網路元件不會送這些標頭。
+    """
+    if not has_request_context():
+        return "zh"
+    if request.headers.get("Sec-Fetch-Mode") or request.headers.get("Sec-Fetch-Site"):
+        return "zh"
+    return em.normalize_lang(request.headers.get("Accept-Language"))
 
 
-def error_fields(code: str, message: str, detail: str | None = None) -> dict:
-    """第 5.5 節的錯誤物件：error 保留給舊版 App 與網頁版直接顯示。"""
-    action, faq = ERROR_META.get(code, ERROR_META["unknown"])
-    return {"error": message, "error_code": code, "error_detail": detail if detail is not None else message,
-            "error_action": action, "error_faq": faq}
+def update_available() -> bool:
+    """有比目前更新的 yt-dlp（已下載好或 PyPI 上有）：HTTP 403 的建議動作改成更新 yt-dlp（ERR3）。"""
+    if UPDATE_STATE["ready"]:
+        return True
+    latest = _LATEST["version"]
+    return bool(latest) and _vtuple(latest) > _vtuple(yt_dlp.version.__version__)
 
 
-def api_error(message: str, status: int, code: str = "unknown", detail: str | None = None, action="__default__"):
-    body = error_fields(code, message, detail)
-    if action != "__default__":
-        body["error_action"] = action
-    return jsonify(body), status
+def engine_text(key: str, lang: str = "zh", **args) -> str:
+    """ENGINE_TEXT 的訊息。參數 step（yt-dlp 後處理名稱）、reason_code（錯誤代碼）會換成該語言的文字。"""
+    lang = em.normalize_lang(lang)
+    if "step" in args:
+        args["step"] = em.pp_label(args["step"], lang)
+    if "reason_code" in args:
+        args["reason"] = em.error_payload(args.pop("reason_code"), lang)["message"]
+    entry = ENGINE_TEXT.get(key)
+    if entry is None:
+        return key
+    try:
+        return entry[lang].format(**args)
+    except (KeyError, IndexError, ValueError):
+        return entry[lang]
+
+
+def render_stage(code: str, params: dict | None, lang: str = "zh") -> str:
+    params = params or {}
+    if code in EXTRA_STAGES:
+        template = EXTRA_STAGES[code][em.normalize_lang(lang)]
+        try:
+            return template.format(**params)
+        except (KeyError, IndexError, ValueError):  # 缺參數時去掉數字部分，不要把 {done} 顯示出來
+            return re.sub(r"\s*[（(]?\{[^}]*\}.*$", "", template).strip(" ，,") or template
+    return em.stage_text(code, lang, **params)
+
+
+def render_error(code: str, params: dict | None, lang: str = "zh") -> dict:
+    """代碼＋參數 → 第 5.5 節的錯誤欄位（依語言）。
+
+    params：detail（原文）、msg（ENGINE_TEXT 的鍵，覆寫一般訊息）、args（msg 的參數）、
+    location（儲存位置，只顯示磁碟代號）、kept（已保留的檔案數）、action（覆寫建議動作，可以是 None）。
+    """
+    p = params or {}
+    lang = em.normalize_lang(lang)
+    detail = p.get("detail") or ""
+    payload = em.error_payload(code, lang, detail, update_available=update_available(), location=p.get("location"))
+    if p.get("msg"):
+        payload["message"] = engine_text(p["msg"], lang, **(p.get("args") or {}))
+    elif code == "live_not_started" and detail:
+        fe = em.friendly_error(detail, lang)  # 從原文解析「預計 N 分鐘後」
+        if fe["code"] == code:
+            payload["message"] = fe["message"]
+    if p.get("kept"):
+        payload["message"] += ("\n" if lang == "zh" else " ") + engine_text("files_kept", lang, n=p["kept"])
+    if "action" in p:
+        payload["action"] = p["action"]
+    return {"error": payload["message"], "error_code": payload["code"], "error_detail": detail or payload["message"],
+            "error_action": payload["action"], "error_faq": payload["faq"]}
+
+
+def error_params(detail: str | None = None, msg: str | None = None, location=None, kept: int = 0,
+                 action=_NO_ACTION, **args) -> dict:
+    p: dict = {"detail": detail or ""}
+    if msg:
+        p["msg"] = msg
+    if args:
+        p["args"] = args
+    if location:
+        p["location"] = str(location)
+    if kept:
+        p["kept"] = kept
+    if action != _NO_ACTION:
+        p["action"] = action
+    return p
+
+
+def api_error(code: str, status: int, **kw):
+    """依代碼回傳錯誤 JSON；kw 同 error_params（msg、detail、location、action、訊息參數）。"""
+    return jsonify(render_error(code, error_params(**kw), req_lang())), status
+
+
+def api_exception(e: BaseException, status: int = 400, location=None):
+    """yt-dlp 或其他例外 → 看得懂的錯誤 JSON（原文放在 error_detail）。"""
+    fe = em.friendly_error(e, req_lang(), update_available=update_available(), location=location)
+    return jsonify(error=fe["message"], error_code=fe["code"], error_detail=fe["detail"],
+                   error_action=fe["action"], error_faq=fe["faq"]), status
+
+
+class OptionError(ValueError):
+    """下載選項有誤（例如時間範圍格式）：str() 是中文訊息，key／args 用來組成其他語言的訊息。"""
+
+    def __init__(self, key: str, **args):
+        self.key, self.args_ = key, args
+        super().__init__(engine_text(key, "zh", **args))
 
 
 def _engine_log(text: str):
@@ -286,12 +438,11 @@ def _json_errors(e):
     """所有錯誤都回傳 JSON：App 不會再拿到 Flask 的 HTML 500 頁，也不會誤報「連接埠被佔用」。"""
     from werkzeug.exceptions import HTTPException
     if isinstance(e, HTTPException):
-        msg = {404: "找不到指定的工作或檔案", 413: "上傳的檔案太大"}.get(e.code, e.description or e.name)
-        return api_error(msg, e.code or 500, detail=f"{e.code} {e.name}", action=None)
+        key = {404: "not_found", 413: "too_large"}.get(e.code, "http_error")
+        return api_error("unknown", e.code or 500, msg=key, http=e.code, detail=f"{e.code} {e.name}", action=None)
     import traceback
     _engine_log(f"未處理的錯誤 {request.method} {request.path}\n{traceback.format_exc()}")
-    return api_error("下載引擎發生錯誤，請重試；一直發生的話請回報問題並附上紀錄檔。", 500,
-                     "engine_internal", detail=f"{e.__class__.__name__}: {e}")
+    return api_error("engine_internal", 500, detail=f"{e.__class__.__name__}: {e}")
 
 
 # --------------------------------------------------------------------------- #
@@ -429,7 +580,9 @@ class DiskFull(DownloadCancelled):
 
 
 class DownloadDirUnavailable(Exception):
-    pass
+    def __init__(self, location: Path, detail: str):
+        self.location, self.detail = location, detail
+        super().__init__(detail)
 
 
 def _gb(n) -> str:
@@ -509,29 +662,30 @@ _YT_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 
 
 def url_problem(url: str) -> str | None:
-    """網址明顯不完整時回傳說明（R14：`watch?v=` 空 id 會被 yt-dlp 當成「recommended」清單）。"""
+    """網址明顯不完整時回傳原因（"invalid_url" 或 ENGINE_TEXT 的鍵），沒問題時回傳 None。
+    R14：`watch?v=` 空 id 會被 yt-dlp 當成「recommended」清單。"""
     from urllib.parse import parse_qs, urlsplit
     if not re.match(r"^https?://", url):
-        return "請輸入有效的網址（http/https）"
+        return "invalid_url"
     try:
         parts = urlsplit(url)
         host = (parts.hostname or "").lower()
     except ValueError:
-        return "請輸入有效的網址（http/https）"
+        return "invalid_url"
     if not host:
-        return "請輸入有效的網址（http/https）"
+        return "invalid_url"
     if host == "youtu.be":
         if not _YT_ID.fullmatch(parts.path.strip("/").split("/")[0]):
-            return "YouTube 網址不完整，請複製完整的影片網址"
+            return "youtube_incomplete"
     elif re.fullmatch(r"(?:www\.|m\.|music\.)?youtube(?:-nocookie)?\.com", host):
         path = parts.path.rstrip("/")
         if path in ("", "/watch"):
             q = parse_qs(parts.query)
             vid = (q.get("v") or [""])[0]
             if not _YT_ID.fullmatch(vid) and not (q.get("list") or [""])[0]:
-                return "YouTube 網址不完整，請複製完整的影片網址"
+                return "youtube_incomplete"
         elif re.fullmatch(r"/(?:shorts|live|embed|v)", path):
-            return "YouTube 網址不完整，請複製完整的影片網址"
+            return "youtube_incomplete"
     return None
 
 
@@ -541,7 +695,7 @@ def api_info():
     url = (data.get("url") or "").strip()
     problem = url_problem(url)
     if problem:
-        return api_error(problem, 400, "invalid_url")
+        return api_error("invalid_url", 400, detail=url, msg=None if problem == "invalid_url" else problem)
     opts = {**BASE_OPTS, "skip_download": True, "extract_flat": "in_playlist",
             "noplaylist": bool(data.get("noplaylist", True))}
     _apply_network_opts(opts, data.get("network") or {})
@@ -549,8 +703,7 @@ def api_info():
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:  # noqa: BLE001
-        msg = _clean_err(e)
-        return api_error(msg, 400, classify_error(msg))
+        return api_exception(e, 400)
 
     if info.get("_type") == "playlist":
         entries = []
@@ -636,12 +789,12 @@ def _parse_ranges(text: str):
             continue
         m = re.match(r"^\s*([\d:.]+)\s*[-~到]\s*([\d:.]+|inf|end)?\s*$", chunk)
         if not m:
-            raise ValueError(f"時間範圍格式錯誤：{chunk}（例：1:30-2:45）")
+            raise OptionError("range_format", chunk=chunk)
         start = parse_duration(m.group(1))
         end_raw = m.group(2)
         end = float("inf") if end_raw in (None, "inf", "end") else parse_duration(end_raw)
         if start is None or end is None or end <= start:
-            raise ValueError(f"時間範圍無效：{chunk}")
+            raise OptionError("range_invalid", chunk=chunk)
         ranges.append((start, end))
     return ranges
 
@@ -840,23 +993,12 @@ JOB_META = "job.json"  # 每個工作資料夾內的工作紀錄，引擎重啟�
 ACTIVE = ("queued", "downloading", "processing")
 RESUMABLE = ("error", "paused")  # 可以按「繼續下載」的狀態
 FINISHED = ("done", "error", "cancelled", "paused")  # 不會再變動、檔案列表可以快取的狀態
-ST_FALLBACK = {"done": "完成", "error": "失敗", "cancelled": "已取消", "paused": "已暫停"}
 AUTO_RESUME = 3  # 下載途中斷線時自動續傳的次數（每次都會重新取得串流網址）
 RESUME_DELAY = 5
 # 網路類錯誤（DNS 失敗、逾時、5xx、429）即使還沒下載到資料也重試，每次等待的秒數（R10）
 NET_BACKOFF = (5, 15, 60)
 NET_CODES = ("network_dns", "network_timeout", "rate_limited")
 LOG_TAIL = 30  # 工作失敗時寫進 engine.log 的紀錄行數
-
-# 處理階段：代碼 → 中文文字（第二階段改由 engine_messages.stage_text 依語言組成）
-STAGE_TEXT = {
-    "queued": "排隊中", "preparing": "準備中", "downloading": "下載中", "downloading_format": "下載中 {fid}",
-    "downloaded": "下載完成，處理中", "processing": "{name}",
-    "reconnecting": "重新連線中（{n}/{m}）", "waiting_network": "網路中斷，{s} 秒後重試（{n}/{m}）",
-    "done": "完成", "done_warnings": "完成（有警告）", "done_partial": "完成 {done}/{total}",
-    "pausing": "暫停中…", "paused": "已暫停", "cancelled": "已取消", "error": "失敗", "interrupted": "已中斷",
-    "disk_full": "磁碟空間不足", "config_error": "設定錯誤", "download_dir_unavailable": "儲存位置無法存取",
-}
 
 # 判斷「真的下載到了」：影片／音訊容器（字幕模式看字幕檔、縮圖模式看圖片），縮圖和字幕不算主檔（R2）
 MEDIA_EXTS = {"mp4", "mkv", "webm", "mov", "avi", "flv", "m4v", "3gp", "ts", "mp3", "m4a", "aac", "opus", "ogg",
@@ -912,13 +1054,14 @@ class Job:
         self.eta = None
         self.downloaded = 0
         self.total = None
+        # 階段與錯誤只存代碼＋參數，回應時才依語言組成文字（第 5.3 節第 4 點）
         self.stage_code = "queued"
-        self.stage = STAGE_TEXT["queued"]
+        self.stage_params: dict = {}
         self.item = None  # 播放清單第幾部
-        self.error = None
-        self.error_code = self.error_detail = self.error_action = self.error_faq = None
-        self.warnings: list[str] = []
-        self.failed_items: list[dict] = []  # 播放清單裡無法下載的項目
+        self.error_code: str | None = None
+        self.error_params: dict | None = None
+        self.warnings: list = []  # {"key", "args"}（ENGINE_TEXT）；舊版 job.json 是字串
+        self.failed_items: list[dict] = []  # 播放清單裡無法下載的項目：index、title、id、error_code、error_detail
         self.done_count = self.total_count = None
         self.log: deque[str] = deque(maxlen=200)
         self.cancel_flag = threading.Event()
@@ -942,17 +1085,57 @@ class Job:
     # ---------- 狀態 ----------
     def set_stage(self, code: str, **params):
         self.stage_code = code
-        self.stage = STAGE_TEXT.get(code, code).format(**params)
+        self.stage_params = params
 
-    def set_error(self, code: str, message: str, detail: str | None = None, action="__default__"):
-        f = error_fields(code, message, detail)
-        self.error, self.error_code, self.error_detail = f["error"], f["error_code"], f["error_detail"]
-        self.error_action = f["error_action"] if action == "__default__" else action
-        self.error_faq = f["error_faq"]
+    def fail(self, code: str, detail: str | None = None, **kw):
+        """記下錯誤代碼與參數（kw 同 error_params：msg、location、kept、action、訊息參數）。"""
+        self.error_code = code
+        self.error_params = error_params(detail, **kw)
 
     def clear_error(self):
-        self.error = self.error_code = self.error_detail = self.error_action = self.error_faq = None
+        self.error_code = self.error_params = None
         self.disk_error = None
+
+    # 中文版本：寫紀錄檔、測試與舊程式碼用；API 回應用 view(lang)
+    @property
+    def stage(self) -> str:
+        return render_stage(self.stage_code, self.stage_params, "zh")
+
+    @property
+    def error(self) -> str | None:
+        return self.view("zh")["error"]
+
+    @property
+    def error_action(self):
+        return self.view("zh")["error_action"]
+
+    @property
+    def error_detail(self):
+        return self.view("zh")["error_detail"]
+
+    def warning_texts(self, lang: str = "zh") -> list[str]:
+        return [w if isinstance(w, str) else engine_text(w.get("key", ""), lang, **(w.get("args") or {}))
+                for w in self.warnings]
+
+    def view(self, lang: str = "zh") -> dict:
+        """依語言組成的階段、錯誤、警告文字。"""
+        d = {"stage": render_stage(self.stage_code, self.stage_params, lang)}
+        if self.error_code:
+            d.update(render_error(self.error_code, self.error_params, lang))
+        else:
+            d.update(error=None, error_code=None, error_detail=None, error_action=None, error_faq=None)
+        d["warnings"] = self.warning_texts(lang)
+        if self.status == "done" and d["warnings"] and not d["error"]:
+            d["error"] = "；".join(d["warnings"]) if em.normalize_lang(lang) == "zh" else "; ".join(d["warnings"])
+        items = []
+        for f in self.failed_items:
+            code = f.get("error_code") or em.classify(f.get("error_detail") or f.get("error") or "")
+            detail = f.get("error_detail") or f.get("error") or ""
+            r = render_error(code, {"detail": detail}, lang)
+            items.append({"index": f.get("index"), "title": f.get("title"), "id": f.get("id"),
+                          "error_code": code, "error": r["error"], "error_detail": detail})
+        d["failed_items"] = items
+        return d
 
     def invalidate_cache(self):
         self._files_cache = self._partial_cache = None
@@ -1017,13 +1200,13 @@ class Job:
         return False
 
     # ---------- 輸出 ----------
-    def to_dict(self, with_log=False):
+    def to_dict(self, with_log=False, lang: str | None = None):
+        """API 回傳的工作物件；文字依 lang（沒給就用目前請求的 Accept-Language）組成。"""
+        lang = lang or req_lang()
         d = {k: getattr(self, k) for k in (
-            "id", "url", "title", "status", "progress", "speed", "eta", "downloaded", "total", "stage", "item",
-            "error", "created", "finished", "error_code", "error_detail", "error_action", "error_faq",
-            "stage_code", "done_count", "total_count")}
-        d["warnings"] = list(self.warnings)
-        d["failed_items"] = [dict(i) for i in self.failed_items]
+            "id", "url", "title", "status", "progress", "speed", "eta", "downloaded", "total", "item",
+            "created", "finished", "stage_code", "stage_params", "error_params", "done_count", "total_count")}
+        d.update(self.view(lang))
         d["mode"] = self.options.get("mode")
         if self.status in ("done", "error", "cancelled", "paused"):
             d["files"] = self.cached_files()
@@ -1036,11 +1219,12 @@ class Job:
         return d
 
     def save(self):
-        """寫入 job.json（原子寫入），引擎被關掉後重開仍能接續；紀錄也一起存，重開後還看得到失敗原因。"""
+        """寫入 job.json（原子寫入），引擎被關掉後重開仍能接續；紀錄也一起存，重開後還看得到失敗原因。
+        stage、error 另存一份中文文字，給舊版引擎（降版）讀。"""
         data = {k: getattr(self, k) for k in (
-            "id", "url", "options", "title", "status", "stage", "stage_code", "error", "error_code",
-            "error_detail", "error_action", "error_faq", "warnings", "failed_items", "done_count", "total_count",
-            "progress", "created", "finished")}
+            "id", "url", "options", "title", "status", "stage_code", "stage_params", "error_code", "error_params",
+            "warnings", "failed_items", "done_count", "total_count", "progress", "created", "finished")}
+        data["stage"], data["error"] = self.stage, self.error
         data["log"] = list(self.log)
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
@@ -1052,6 +1236,7 @@ class Job:
 
     @classmethod
     def load(cls, meta: Path) -> Job:
+        """讀 job.json；v1.2 以前（只有中文 stage／error）與第一階段（stage_code 舊代碼、error_detail）的紀錄也讀得懂。"""
         d = json.loads(meta.read_text(encoding="utf-8"))
         job = cls(d["url"], d.get("options") or {}, d.get("title"), job_id=meta.parent.name, job_dir=meta.parent)
         job.created = d.get("created") or meta.stat().st_mtime
@@ -1059,26 +1244,44 @@ class Job:
         job.progress = d.get("progress") or 0.0
         job.log.extend(str(x) for x in (d.get("log") or [])[-job.log.maxlen:])
         job.warnings = list(d.get("warnings") or [])
-        job.failed_items = list(d.get("failed_items") or [])
+        job.failed_items = [dict(f) for f in d.get("failed_items") or [] if isinstance(f, dict)]
         job.done_count, job.total_count = d.get("done_count"), d.get("total_count")
         if d.get("status") in ACTIVE:
             # 上次引擎在下載途中被關閉（關掉視窗、重開機、當機）
-            part = job.partial_bytes()
-            job.status = "error"
-            job.set_stage("interrupted")
-            job.set_error("unknown", "下載引擎在下載途中被關閉，工作已中斷。按「繼續下載」會從中斷處接著下載"
-                          + (f"（已下載 {_gb(part)}）。" if part else "。"), action="resume")
-            job.finished = job.finished or time.time()
-        else:
-            job.status = d.get("status") or "error"
-            job.stage_code = d.get("stage_code") or job.status
-            job.stage = d.get("stage") or ST_FALLBACK.get(job.status, "")
-            job.error = d.get("error")
-            for k in ("error_code", "error_detail", "error_action", "error_faq"):
-                setattr(job, k, d.get(k))
-            if job.error and not job.error_code and job.status == "error":  # v1.2 以前的紀錄沒有代碼
-                job.set_error(classify_error(job.error), job.error)
+            _mark_interrupted(job)
+            return job
+        job.status = d.get("status") or "error"
+        code = d.get("stage_code")
+        code = _STAGE_ALIASES.get(code, code)
+        if code not in STAGE_CODES:
+            code = _ZH_STAGE_TO_CODE.get(d.get("stage") or "") or \
+                {"done": "done", "cancelled": "cancelled", "paused": "paused"}.get(job.status, "failed")
+        params = d.get("stage_params")
+        if params is None and code == "done_partial":  # 第一階段沒存參數
+            params = {"done": job.done_count, "total": job.total_count}
+        job.set_stage(code, **(params or {}))
+        if "error_params" in d:
+            job.error_code, job.error_params = d.get("error_code"), d.get("error_params")
+        elif d.get("error") and job.status == "done":
+            if not job.warnings:
+                job.warnings = [d["error"]]  # 舊版「完成（有警告）」把警告放在 error
+        elif code == "interrupted" and job.status == "error":
+            _mark_interrupted(job)
+        elif d.get("error"):
+            raw = d.get("error_detail") or d["error"]
+            job.fail(d.get("error_code") or em.classify(raw), raw)
         return job
+
+
+def _mark_interrupted(job: Job):
+    part = job.partial_bytes()
+    job.status = "error"
+    job.set_stage("interrupted")
+    if part:
+        job.fail("unknown", msg="interrupted_size", size=_gb(part), action="resume")
+    else:
+        job.fail("unknown", msg="interrupted", action="resume")
+    job.finished = job.finished or time.time()
 
 
 class Scheduler:
@@ -1211,30 +1414,13 @@ def _record_failure(job: Job, msg: str):
     if index is None:
         n = job._autonumber
         index = job.retry_indices[n - 1] if job.retry_indices and n and n <= len(job.retry_indices) else n
-    m = re.match(r"\[[\w:.-]+\]\s+([\w-]+):\s*(.*)", raw, re.DOTALL)
+    m = re.match(r"\[[\w:.-]+\]\s+([\w-]+):", raw)
     vid = entry.get("id") or (m.group(1) if m else None)
-    text = (m.group(2) if m else raw).strip() or raw
     if any(f["index"] == index for f in job._run_failures):
         return  # 同一部只記第一個錯誤
+    # 只存代碼與原文；給使用者看的訊息在 to_dict() 依語言組成
     job._run_failures.append({"index": index, "title": entry.get("title") or vid, "id": vid,
-                              "error_code": classify_error(raw), "error": text, "error_detail": raw})
-
-
-PP_NAMES = {
-    "Merger": "合併影音軌", "FFmpegMerger": "合併影音軌", "FFmpegExtractAudio": "轉換音訊",
-    "FFmpegVideoRemuxer": "重新封裝容器", "FFmpegVideoConvertor": "重新編碼影片",
-    "FFmpegEmbedSubtitle": "嵌入字幕", "FFmpegSubtitlesConvertor": "轉換字幕",
-    "FFmpegMetadata": "寫入中繼資料", "EmbedThumbnail": "嵌入封面", "FFmpegThumbnailsConvertor": "轉換縮圖",
-    "SponsorBlock": "查詢 SponsorBlock", "ModifyChapters": "移除片段", "FFmpegSplitChapters": "依章節切割",
-    "MoveFiles": "整理檔案", "FFmpegFixupM3u8": "修正串流", "FFmpegFixupM4a": "修正 M4A",
-}
-
-
-def _pp_label(name: str | None) -> str:
-    """yt-dlp 回報的後處理名稱有時沒有 FFmpeg 前綴（例如 VideoRemuxer），兩種都查。"""
-    if not name:
-        return "後處理"
-    return PP_NAMES.get(name) or PP_NAMES.get(f"FFmpeg{name}") or name
+                              "error_code": em.classify(raw), "error_detail": raw})
 
 
 def _file_size(path) -> int:
@@ -1252,9 +1438,15 @@ def _pp_start(job: Job, info: dict):
     job.pp_started = time.time()
 
 
-def _pp_disk_message(job: Job, free: int) -> str:
-    return (f"磁碟空間不足：「{job.stage}」需要約 {_gb(job.pp_total)}，{job.dir.anchor or job.dir} 只剩 {_gb(free)}"
-            f"（保留 {_gb(MIN_FREE_BYTES)} 給系統）。已下載的部分會保留，清出空間或更換儲存位置後按「繼續下載」。")
+def _disk_full(job: Job, msg: str, **args) -> DiskFull:
+    """記下空間不足的原因（ENGINE_TEXT 的鍵＋參數），回傳要丟出的例外。"""
+    args = {"anchor": job.dir.anchor or str(job.dir), "reserve": _gb(MIN_FREE_BYTES), **args}
+    job.disk_error = {"msg": msg, "args": args}
+    return DiskFull(engine_text(msg, "zh", **args))
+
+
+def _pp_disk_full(job: Job, free: int) -> DiskFull:
+    return _disk_full(job, "disk_full_pp", step=job.stage_params.get("name"), need=_gb(job.pp_total), free=_gb(free))
 
 
 def _check_pp_disk(job: Job):
@@ -1263,8 +1455,7 @@ def _check_pp_disk(job: Job):
         return
     free = disk_info(job.dir)["free"]
     if free is not None and free - job.pp_total < MIN_FREE_BYTES:
-        job.disk_error = _pp_disk_message(job, free)
-        raise DiskFull(job.disk_error)
+        raise _pp_disk_full(job, free)
 
 
 def _pp_progress(job: Job):
@@ -1281,7 +1472,7 @@ def _pp_progress(job: Job):
     done = st.st_size
     job.downloaded, job.total = done, total
     job.progress = round(min(100.0, done * 100 / total), 1)
-    job.rate.update(("pp", job.stage, out.name), done, total)
+    job.rate.update(("pp", job.stage_code, out.name), done, total)
     job.speed, job.eta = job.rate.speed, job.rate.eta
 
 
@@ -1295,7 +1486,7 @@ def _watch_pp_disk(job: Job):
     job._disk_checked = now
     free = disk_info(job.dir)["free"]
     if free is not None and free < MIN_FREE_BYTES // 4 and not job.disk_error:
-        job.disk_error = _pp_disk_message(job, free)
+        _pp_disk_full(job, free)  # 只記下原因，不能從這個執行緒中斷 FFmpeg
 
 
 def _trim_length(job_dir: Path) -> int:
@@ -1304,8 +1495,9 @@ def _trim_length(job_dir: Path) -> int:
     return max(32, min(150, 240 - len(str(job_dir)) - 30))
 
 
-def _is_network_err(msg: str) -> bool:
-    return classify_error(msg) in NET_CODES
+def _is_network_err(e) -> bool:
+    """網路類錯誤（DNS、逾時、429）與伺服器暫時錯誤（HTTP 5xx）：就算沒進度也值得等一下再試。"""
+    return em.classify(e) in NET_CODES or bool(re.search(r"HTTP Error 5\d\d", str(e)))
 
 
 def _clean_err(e: BaseException) -> str:
@@ -1367,7 +1559,10 @@ def _run_job(job: Job):
     except Exception as e:  # noqa: BLE001
         job.status = "error"
         job.set_stage("config_error")
-        job.set_error("unknown", str(e), action=None)
+        if isinstance(e, OptionError):
+            job.fail("unknown", str(e), msg=e.key, action=None, **e.args_)
+        else:
+            job.fail("unknown", _clean_err(e), msg="options_invalid", action=None)
         job.finished = time.time()
         job.save()
         return
@@ -1389,12 +1584,9 @@ def _run_job(job: Job):
             return
         need = (total - done) if total else 0
         if free - need < MIN_FREE_BYTES:
-            job.disk_error = (
-                f"磁碟空間不足：{job.dir.anchor or job.dir} 只剩 {_gb(free)}"
-                + (f"，這個檔案還需要約 {_gb(need)}" if need else "")
-                + f"（保留 {_gb(MIN_FREE_BYTES)} 給系統）。已停止下載，已完成的檔案會保留。"
-                "請改到空間較大的磁碟（下載佇列上方「儲存位置」），或降低畫質 / 減少清單項目。")
-            raise DiskFull(job.disk_error)
+            if need:
+                raise _disk_full(job, "disk_full_download_need", free=_gb(free), need=_gb(need))
+            raise _disk_full(job, "disk_full_download", free=_gb(free))
 
     def hook(d):
         if job.cancel_flag.is_set():
@@ -1410,7 +1602,7 @@ def _run_job(job: Job):
             if job.stage_code == "pausing":
                 pass
             elif fid:
-                job.set_stage("downloading_format", fid=fid)
+                job.set_stage("downloading", format_id=fid)
             else:
                 job.set_stage("downloading")
             job.downloaded, job.total = done, total
@@ -1422,7 +1614,7 @@ def _run_job(job: Job):
             job.speed, job.eta = job.rate.speed, job.rate.eta
         elif st == "finished":
             job.progress = 100.0
-            job.set_stage("downloaded")
+            job.set_stage("download_finished")
             job.speed = job.eta = None
 
     def pp_hook(d):
@@ -1432,7 +1624,7 @@ def _run_job(job: Job):
             _pp_start(job, d.get("info_dict") or {})
             job.progress, job.downloaded, job.total = 0.0, 0, None  # 不沿用下載階段的 100%
             job.speed = job.eta = None
-            job.set_stage("processing", name=_pp_label(d.get("postprocessor")))
+            job.set_stage("postprocessing", name=d.get("postprocessor"))
             job.status = "processing"
             _check_pp_disk(job)
         elif d.get("status") == "finished":
@@ -1460,16 +1652,14 @@ def _run_job(job: Job):
             _watch_pp_disk(job)
 
     try:
-        dir_err = download_dir_error(job.dir)
+        dir_err = download_dir_problem(job.dir)
         if dir_err:
-            raise DownloadDirUnavailable(dir_err)
+            raise DownloadDirUnavailable(job.dir, dir_err)
         job.save()
         threading.Thread(target=watch_pp, daemon=True).start()
         free = disk_info(job.dir)["free"]
         if free is not None and free < MIN_FREE_BYTES:
-            job.disk_error = (f"磁碟空間不足：{job.dir.anchor or job.dir} 只剩 {_gb(free)}，未開始下載。"
-                              "請清出空間或更換儲存位置。")
-            raise DiskFull(job.disk_error)
+            raise _disk_full(job, "disk_full_start", free=_gb(free))
         _download_with_retries(job, opts, playlist)
         _finish_success(job, playlist)
     except Cancelled:
@@ -1482,7 +1672,7 @@ def _run_job(job: Job):
     except DownloadDirUnavailable as e:
         job.status = "error"
         job.set_stage("download_dir_unavailable")
-        job.set_error("download_dir_unavailable", str(e))
+        job.fail("download_dir_unavailable", e.detail, location=e.location)
     except BaseException as e:  # noqa: BLE001 — yt-dlp 會把 hook 例外包成 DownloadError
         _finish_failure(job, e)
     finally:
@@ -1497,7 +1687,9 @@ def _run_job(job: Job):
         job.invalidate_cache()
         if job.status == "error":
             tail = "\n".join(f"    {line}" for line in list(job.log)[-LOG_TAIL:])
-            _engine_log(f"工作 {job.id} 失敗（{job.error_code}）：{job.title}\n  {job.error}\n  最後 {LOG_TAIL} 行紀錄：\n{tail}")
+            v = job.view("zh")
+            _engine_log(f"工作 {job.id} 失敗（{job.error_code}）：{job.title}\n  {v['error']}\n  原文：{v['error_detail']}"
+                        f"\n  最後 {LOG_TAIL} 行紀錄：\n{tail}")
         job.save()
 
 
@@ -1523,20 +1715,20 @@ def _download_with_retries(job: Job, opts: dict, playlist: bool):
             if job.cancel_flag.is_set():
                 raise Cancelled() from None
             msg = _clean_err(e)
-            if job.disk_error or _is_disk_err(msg):
+            if job.disk_error or em.classify(e) == "disk_full":
                 raise
             if attempt < AUTO_RESUME and job.partial_bytes() > before:
                 attempt += 1
                 delay = RESUME_DELAY
                 job.log.append(f"⟳ 下載中斷：{msg}")
                 job.log.append(f"⟳ {delay} 秒後自動續傳（第 {attempt}/{AUTO_RESUME} 次）")
-                job.set_stage("reconnecting", n=attempt, m=AUTO_RESUME)
-            elif _is_network_err(msg) and net_attempt < len(NET_BACKOFF):
+                job.set_stage("reconnecting", attempt=attempt, max=AUTO_RESUME)
+            elif _is_network_err(e) and net_attempt < len(NET_BACKOFF):
                 delay = NET_BACKOFF[net_attempt]
                 net_attempt += 1
                 job.log.append(f"⟳ 網路錯誤：{msg}")
                 job.log.append(f"⟳ {delay} 秒後重試（第 {net_attempt}/{len(NET_BACKOFF)} 次）")
-                job.set_stage("waiting_network", s=delay, n=net_attempt, m=len(NET_BACKOFF))
+                job.set_stage("waiting_network", s=delay, attempt=net_attempt, max=len(NET_BACKOFF))
             else:
                 raise
             job.status, job.speed, job.eta = "downloading", None, None
@@ -1564,33 +1756,28 @@ def _finish_success(job: Job, playlist: bool):
         _merge_failures(job)
     job.warnings = []
     if not job.has_main_media():
+        job.status = "error"
+        job.set_stage("failed")
         if job.failed_items:
             first = job.failed_items[0]
-            n = len(job.failed_items)
-            job.status = "error"
-            job.set_stage("error")
-            job.set_error(first["error_code"], f"清單中的 {n} 部影片都無法下載：{first['error']}",
-                          detail=first["error_detail"])
+            job.fail(first["error_code"], first["error_detail"], msg="playlist_all_failed",
+                     n=len(job.failed_items), reason_code=first["error_code"])
             return
-        detail = _clean_err(Exception(job._last_error)) if job._last_error else None
+        detail = _clean_err(Exception(job._last_error)) if job._last_error else ""
         mode = job.options.get("mode")
-        what = "字幕檔" if mode == "subs" else "縮圖" if mode == "thumb" else "影片或音訊檔"
-        job.status = "error"
-        job.set_stage("error")
-        job.set_error(classify_error(detail or ""), f"下載失敗：沒有產生{what}" + (f"（{detail}）" if detail else "，請查看紀錄"),
-                      detail=detail)
+        job.fail(em.classify(detail) if detail else "unknown", detail,
+                 msg="no_subs" if mode == "subs" else "no_thumb" if mode == "thumb" else "no_media")
         return
     job.status, job.progress = "done", 100.0
     job.clear_error()
     if job.failed_items:
         n = len(job.failed_items)
-        job.warnings = [f"{n} 部無法下載"]
         if job.total_count:
-            job.error = f"完成 {job.done_count}/{job.total_count}，{n} 部無法下載"
+            job.warnings = [{"key": "done_partial", "args": {"done": job.done_count, "total": job.total_count, "n": n}}]
             job.set_stage("done_partial", done=job.done_count, total=job.total_count)
         else:
-            job.error = job.warnings[0]
-            job.set_stage("done_warnings")
+            job.warnings = [{"key": "items_failed", "args": {"n": n}}]
+            job.set_stage("done_with_warnings")
     else:
         job.set_stage("done")
         if playlist and job.total_count:
@@ -1605,31 +1792,29 @@ def _finish_failure(job: Job, e: BaseException):
         return
     if job.options.get("playlist"):
         _merge_failures(job)
-    if not job.disk_error and classify_error(msg) == "ffmpeg_failed" and job.pp_total:
+    code = em.classify(e)
+    if not job.disk_error and code == "ffmpeg_failed" and job.pp_total:
         free = disk_info(job.dir)["free"]
         if free is not None and free < job.pp_total:  # FFmpeg 寫到一半空間用完，錯誤訊息不一定有 Errno 28
-            job.disk_error = _pp_disk_message(job, free)
-    if job.disk_error or _is_disk_err(msg):
-        kept = len(job.files())
+            _pp_disk_full(job, free)
+    if job.disk_error or code == "disk_full":
         job.status = "error"
         job.set_stage("disk_full")
-        text = job.disk_error or (
-            f"磁碟空間不足（{job.dir.anchor or job.dir} 只剩 {_gb(disk_info(job.dir)['free'])}），下載已停止。"
-            "請改到空間較大的磁碟（下載佇列上方「儲存位置」），或降低畫質 / 減少清單項目。")
-        if kept:
-            text += f"\n已保留完成的 {kept} 個檔案。"
-        job.set_error("disk_full", text, detail=msg)
+        de = job.disk_error or {"msg": "disk_full_generic", "args": {
+            "anchor": job.dir.anchor or str(job.dir), "free": _gb(disk_info(job.dir)["free"])}}
+        job.fail("disk_full", msg, msg=de["msg"], kept=len(job.files()), **de["args"])
     elif job.has_main_media():
-        # 主檔已下載，只有後製步驟失敗 → 視為完成並附上警告
+        # 主檔已下載，只有後製步驟失敗 → 視為完成並附上警告（原文留在紀錄裡）
         job.status, job.progress = "done", 100.0
         job.clear_error()
-        job.set_stage("done_warnings")
-        job.warnings = ["部分步驟失敗：" + msg]
-        job.error = job.warnings[0]
+        job.set_stage("done_with_warnings")
+        # detail 不出現在訊息裡（ENGINE_TEXT 用不到的參數會被忽略），留給之後的「詳細資訊」
+        job.warnings = [{"key": "steps_failed", "args": {"reason_code": code, "detail": msg}}]
+        job.log.append(f"⚠ 部分步驟失敗：{msg}")
     else:
         job.status = "error"
-        job.set_stage("error")
-        job.set_error(classify_error(msg), msg)
+        job.set_stage("failed")
+        job.fail(code, msg)
 
 
 def _start(job: Job, token: int):
@@ -1642,15 +1827,18 @@ def api_download():
     url = (data.get("url") or "").strip()
     problem = url_problem(url)
     if problem:
-        return api_error(problem, 400, "invalid_url")
+        return api_error("invalid_url", 400, detail=url, msg=None if problem == "invalid_url" else problem)
     options = data.get("options") or {}
     try:
         build_opts(options, DEFAULT_DOWNLOAD_DIR / "_validate")  # 先驗證，錯誤立刻回報
+    except OptionError as e:
+        return api_error("unknown", 400, detail=str(e), msg=e.key, action=None, **e.args_)
     except Exception as e:  # noqa: BLE001
-        return api_error(str(e), 400, action=None)
-    dir_err = download_dir_error()
-    if dir_err:
-        return api_error(dir_err, 503, "download_dir_unavailable")
+        return api_error("unknown", 400, detail=_clean_err(e), msg="options_invalid", action=None)
+    d = get_download_dir()
+    problem = download_dir_problem(d)
+    if problem:
+        return api_error("download_dir_unavailable", 503, detail=problem, location=d)
     job = Job(url, options, data.get("title"))
     with JOBS_LOCK:
         JOBS[job.id] = job
@@ -1720,7 +1908,7 @@ def api_pause(job_id):
     with JOBS_LOCK:
         ok = _stop(job, "pause")
     if not ok:
-        return api_error("只有下載中或排隊中的工作可以暫停", 409, action=None)
+        return api_error("unknown", 409, msg="pause_not_allowed", action=None)
     return jsonify(job.to_dict())
 
 
@@ -1774,7 +1962,7 @@ def api_resume(job_id):
     """失敗、中斷或暫停的工作用同一個資料夾重跑；yt-dlp 會偵測 .part 從中斷處續傳。"""
     job = _get_job(job_id)
     if not _requeue(job, RESUMABLE):
-        return api_error("只有失敗、中斷或暫停的工作可以繼續", 409, action=None)
+        return api_error("unknown", 409, msg="resume_not_allowed", action=None)
     return jsonify(job.to_dict())
 
 
@@ -1783,7 +1971,7 @@ def api_retry_failed(job_id):
     """播放清單：只重新下載失敗的那幾部（R3）。"""
     job = _get_job(job_id)
     if not _requeue(job, ("done", "error"), retry=True):
-        return api_error("這個工作沒有可以重試的失敗項目", 409, action=None)
+        return api_error("unknown", 409, msg="retry_failed_none", action=None)
     return jsonify(job.to_dict())
 
 
@@ -1838,17 +2026,17 @@ def api_delete(job_id):
     job = _get_job(job_id)
     mode = request.args.get("files", "keep")
     if mode not in ("keep", "trash"):
-        return api_error("files 參數只能是 keep 或 trash", 400, action=None)
+        return api_error("unknown", 400, msg="delete_files_param", action=None)
     if job.status in ACTIVE or job.running:
-        return api_error("工作進行中，請先暫停或取消", 409, action=None)
+        return api_error("unknown", 409, msg="job_busy", action=None)
     if mode == "trash":
         if job.dir.exists():
             if send2trash is None:
-                return api_error("這台電腦無法使用資源回收筒，檔案沒有刪除", 500, "engine_internal", action=None)
+                return api_error("engine_internal", 500, msg="trash_unavailable", action=None)
             try:
                 send2trash(str(job.dir))
             except Exception as e:  # noqa: BLE001 — send2trash 在各平台丟出的例外類別不同
-                return api_error("無法把檔案移到資源回收筒，檔案沒有刪除", 500, "engine_internal",
+                return api_error("engine_internal", 500, msg="trash_failed",
                                  detail=f"{e.__class__.__name__}: {e}", action=None)
     else:
         _forget(job)
@@ -1931,7 +2119,7 @@ def api_meta():
                    frozen=FROZEN, update_ready=UPDATE_STATE["ready"],
                    ffmpeg=bool(shutil.which("ffmpeg")), cookies_file=COOKIES_FILE.is_file(),
                    disk=disk_info(d), min_free=MIN_FREE_BYTES,
-                   download_dir=str(d), download_dir_error=download_dir_error(d), parallel=SCHED.limit,
+                   download_dir=str(d), **download_dir_status(d), parallel=SCHED.limit,
                    just_updated=os.environ.get("YTDL_JUST_UPDATED") == "1",
                    update_running=UPDATE_STATE["running"], update_message=UPDATE_STATE["message"])
 
@@ -1950,7 +2138,7 @@ def api_settings():
     d = get_download_dir()
     return jsonify(download_dir=str(d), default_dir=str(DEFAULT_DOWNLOAD_DIR),
                    env_locked=bool(os.environ.get("YTDL_DOWNLOAD_DIR")),
-                   min_free=MIN_FREE_BYTES, disk=disk_info(d), download_dir_error=download_dir_error(d),
+                   min_free=MIN_FREE_BYTES, disk=disk_info(d), **download_dir_status(d),
                    parallel=SCHED.limit, parallel_range=list(PARALLEL_RANGE),
                    # 列磁碟可能碰到離線的網路磁碟而變慢，只在明確要求時才列
                    drives=list_drives() if request.args.get("drives") == "1" else None)
@@ -1967,31 +2155,31 @@ def api_settings_save():
         except (TypeError, ValueError):
             n = 0
         if not PARALLEL_RANGE[0] <= n <= PARALLEL_RANGE[1]:
-            return api_error(f"同時下載數要介於 {PARALLEL_RANGE[0]} 到 {PARALLEL_RANGE[1]} 之間", 400, action=None)
+            return api_error("unknown", 400, msg="parallel_range", lo=PARALLEL_RANGE[0], hi=PARALLEL_RANGE[1],
+                             action=None)
         settings["parallel"] = n
     if "download_dir" in body or "parallel" not in body:  # 舊版只送 download_dir（空字串＝改回預設）
         if os.environ.get("YTDL_DOWNLOAD_DIR"):
-            return api_error("儲存位置由環境變數 YTDL_DOWNLOAD_DIR 指定，無法在網頁修改", 409, action=None)
+            return api_error("unknown", 409, msg="dir_env_locked", action=None)
         raw = str(body.get("download_dir") or "").strip().strip('"')
         if not raw:
             target = DEFAULT_DOWNLOAD_DIR
         else:
             target = Path(raw).expanduser()
             if not target.is_absolute():
-                return api_error("請輸入完整路徑，例如 D:\\Videos\\yt", 400, action=None)
+                return api_error("unknown", 400, msg="dir_not_absolute", action=None)
         try:
             target.mkdir(parents=True, exist_ok=True)
             probe = target / f".ytdl-write-test-{uuid.uuid4().hex[:6]}"
             probe.write_bytes(b"ok")
             probe.unlink()
         except OSError as e:
-            return api_error(f"無法寫入這個資料夾：{e.strerror or e}", 400, "download_dir_unavailable",
-                             detail=str(e))
+            return api_error("download_dir_unavailable", 400, detail=str(e), location=target)
         settings["download_dir"] = "" if target == DEFAULT_DOWNLOAD_DIR else str(target.resolve())
     try:
         _save_settings(settings)
     except OSError as e:
-        return api_error(f"無法儲存設定：{e.strerror or e}", 500, "engine_internal", detail=str(e))
+        return api_error("engine_internal", 500, msg="settings_save_failed", detail=str(e))
     if "parallel" in settings:
         SCHED.set_limit(settings["parallel"])
     return api_settings()
@@ -2001,9 +2189,9 @@ def api_settings_save():
 def api_update():
     """手動更新 yt-dlp；沒有進行中的工作時自動重啟套用。打包版若已在背景下載好，直接重新啟動。"""
     if UPDATE_STATE["running"]:
-        return api_error("更新進行中", 409, action=None)
+        return api_error("unknown", 409, msg="update_running", action=None)
     if _busy():
-        return api_error("有下載工作進行中，請完成後再更新", 409, action=None)
+        return api_error("unknown", 409, msg="update_busy", action=None)
 
     def work():
         UPDATE_STATE.update(running=True, message="更新中…")
@@ -2031,7 +2219,7 @@ def api_cookies_upload():
     f = request.files.get("file")
     text = f.read().decode("utf-8", "replace") if f else (request.get_json(silent=True) or {}).get("text", "")
     if "\t" not in text or not re.search(r"(?m)^(#HttpOnly_)?\.?[\w.-]+\t(TRUE|FALSE)\t", text):
-        return api_error("不是 Netscape 格式的 cookies.txt", 400, "cookies_invalid")
+        return api_error("cookies_invalid", 400, detail="not a Netscape format cookies file")
     if not text.startswith("# Netscape HTTP Cookie File") and not text.startswith("# HTTP Cookie File"):
         text = "# Netscape HTTP Cookie File\n" + text
     COOKIES_FILE.write_text(text, encoding="utf-8")
@@ -2057,15 +2245,15 @@ class _CaptureLogger:
     info = warning = error = debug
 
 
-def _auth_hint(err: str, browser: str | None) -> str:
+def _auth_hint(err: str, browser: str | None) -> str | None:
+    """瀏覽器 Cookie 讀取失敗時更具體的說明（ENGINE_TEXT 的鍵）；沒有更具體的說明時回傳 None。"""
     low = err.lower()
     if browser in ("chrome", "edge", "brave", "opera", "vivaldi", "chromium") and (
             "dpapi" in low or "decrypt" in low or "could not copy" in low or "permission" in low):
-        return (f"無法讀取 {browser.title()} 的 Cookie：Windows 上新版 Chromium 系瀏覽器會加密 / 鎖定 Cookie。"
-                "請完全關閉該瀏覽器再試，或改用 Firefox，或改用 cookies.txt 方式。")
+        return "browser_cookies_locked"
     if "could not find" in low and "cookies database" in low:
-        return f"找不到 {browser} 的 Cookie 資料庫，請確認已安裝並登入過 YouTube。"
-    return err
+        return "browser_cookies_not_found"
+    return None
 
 
 @app.post("/api/auth/test")
@@ -2075,7 +2263,7 @@ def api_auth_test():
     opts = {**BASE_OPTS, "skip_download": True, "verbose": True, "noplaylist": True}
     _apply_network_opts(opts, net)
     if "cookiefile" not in opts and "cookiesfrombrowser" not in opts:
-        return api_error("尚未設定 Cookie 來源", 400, action="open_cookie_settings")
+        return api_error("unknown", 400, msg="cookie_source_missing", action="open_cookie_settings")
     log = _CaptureLogger()
     opts["logger"] = log
     try:
@@ -2088,7 +2276,11 @@ def api_auth_test():
                 premium = any("Detected YouTube Premium subscription" in m for m in log.lines)
     except Exception as e:  # noqa: BLE001
         raw = _clean_err(e)
-        return api_error(_auth_hint(raw, net.get("cookies_browser")), 400, classify_error(raw), detail=raw)
+        browser = net.get("cookies_browser")
+        hint = _auth_hint(raw, browser)
+        if hint:
+            return api_error("cookie_browser_locked", 400, detail=raw, msg=hint, browser=str(browser).title())
+        return api_exception(e, 400)
     expired = any("cookies are no longer valid" in m.lower() for m in log.lines)
     return jsonify(logged_in=logged_in and not expired, premium=premium, expired=expired)
 
