@@ -123,7 +123,14 @@ def test_playlist_continues_after_private_video(local_site):
     assert "Private video" in item["error_detail"]
     assert job.warnings, "部分失敗要有警告"
     d = job.to_dict()
-    assert d["failed_items"] == job.failed_items and d["done_count"] == 2 and d["total_count"] == 3
+    assert d["done_count"] == 2 and d["total_count"] == 3
+    shown = d["failed_items"][0]
+    assert shown["index"] == 2 and shown["title"] == "影片 2" and shown["error_code"] == "private_video"
+    assert shown["error"].startswith("這是私人影片") and "Private video" in shown["error_detail"]
+    assert d["warnings"] == ["完成 2/3，1 部無法下載"] and d["stage"] == "完成 2/3"
+    en = job.to_dict(lang="en")
+    assert en["failed_items"][0]["error"].startswith("This is a private video")
+    assert en["warnings"] == ["Done 2/3; 1 couldn't be downloaded"] and en["stage"] == "Done 2/3"
 
 
 def test_retry_failed_reruns_only_failed_items(local_site, client, jobs):
@@ -280,7 +287,7 @@ def test_success_without_main_media_is_an_error(scripted):
     job = new_job()
     server.run_job(job)
     assert job.status == "error"
-    assert job.stage_code == "error"
+    assert job.stage_code == "failed"
 
 
 def test_subtitle_mode_counts_subtitle_files(scripted):
@@ -296,7 +303,7 @@ def test_subtitle_mode_counts_subtitle_files(scripted):
 def test_engine_imports_when_download_drive_is_missing(tmp_path):
     bad = "Z:\\nodrive\\yt" if os.name == "nt" and not os.path.exists("Z:\\") else str(unreachable_dir(tmp_path))
     env = {**os.environ, "YTDL_DOWNLOAD_DIR": bad, "YTDL_PORT": "18799", "PYTHONIOENCODING": "utf-8"}
-    code = "import json, server; print(json.dumps(server.download_dir_error()))"
+    code = "import json, server; print(json.dumps(server.download_dir_problem()))"
     p = subprocess.run([sys.executable, "-c", code], cwd=Path(server.__file__).parent, env=env,
                        capture_output=True, text=True, encoding="utf-8", timeout=120, check=False)
     assert p.returncode == 0, p.stderr
@@ -308,7 +315,11 @@ def test_missing_download_dir_is_reported_as_json(client, monkeypatch, tmp_path)
     monkeypatch.setenv("YTDL_DOWNLOAD_DIR", str(bad))
     assert server.get_download_dir() == bad
     meta = client.get("/api/meta")
-    assert meta.status_code == 200 and str(bad) in meta.get_json()["download_dir_error"]
+    m = meta.get_json()
+    assert meta.status_code == 200 and "設定 → 儲存位置" in m["download_dir_error"]
+    assert str(bad) in m["download_dir_error_detail"] and m["download_dir"] == str(bad)
+    en = client.get("/api/meta", headers={"Accept-Language": "en-US,en;q=0.9"}).get_json()
+    assert "Settings → Storage location" in en["download_dir_error"]
     s = client.get("/api/settings")
     assert s.status_code == 200 and s.get_json()["download_dir_error"]
     r = client.post("/api/download", json={"url": YT + "w", "options": {"mode": "av"}})
@@ -316,7 +327,7 @@ def test_missing_download_dir_is_reported_as_json(client, monkeypatch, tmp_path)
     body = r.get_json()
     assert body["error_code"] == "download_dir_unavailable"
     assert body["error_action"] == "open_storage_settings" and body["error_faq"] == "err-download-dir"
-    assert server.download_dir_error(tmp_path) is None
+    assert server.download_dir_problem(tmp_path) is None
 
 
 def test_job_on_vanished_drive_fails_cleanly(scripted, tmp_path):
@@ -768,7 +779,9 @@ def test_old_job_json_without_codes_still_loads(tmp_path):
     }), encoding="utf-8")
     job = server.Job.load(d / server.JOB_META)
     assert job.error_code == "http_403" and job.warnings == [] and job.failed_items == []
-    assert job.to_dict()["stage_code"] == "error"
+    d = job.to_dict()
+    assert d["stage_code"] == "failed" and d["stage"] == "失敗"
+    assert d["error"].startswith("伺服器拒絕下載") and d["error_detail"] == "HTTP Error 403: Forbidden"
 
 
 # --------------------------------------------------------------------------- #
@@ -819,3 +832,220 @@ def test_queue_position_ignores_superseded_entries():
     a, b = new_job("w"), new_job("x")
     sched.waiting = [(a, a.run_token - 1), (a, a.run_token), (b, b.run_token)]
     assert sched.position(a) == 1 and sched.position(b) == 2
+
+
+# --------------------------------------------------------------------------- #
+#  第二階段：engine_messages、Accept-Language、工作只存代碼＋參數
+# --------------------------------------------------------------------------- #
+EN = {"Accept-Language": "en-US,en;q=0.9"}
+
+
+@pytest.mark.parametrize(("header", "lang"), [
+    (None, "zh"), ("en", "en"), ("en-GB", "en"), ("zh-TW,en;q=0.8", "zh"), ("ja", "zh"), ("", "zh"),
+])
+def test_language_follows_accept_language(client, header, lang):
+    headers = {"Accept-Language": header} if header is not None else {}
+    body = client.post("/api/info", json={"url": "ftp://x"}, headers=headers).get_json()
+    assert body["error_code"] == "invalid_url"
+    assert body["error"] == server.em.error_payload("invalid_url", lang)["message"]
+
+
+def test_api_errors_are_bilingual(client, monkeypatch):
+    zh = client.get("/api/jobs/nope").get_json()["error"]
+    en = client.get("/api/jobs/nope", headers=EN).get_json()["error"]
+    assert zh == "找不到指定的工作或檔案" and en == "The job or file wasn't found."
+    r = client.post("/api/info", json={"url": "https://www.youtube.com/watch?v="}, headers=EN).get_json()
+    assert r["error"] == "This YouTube link is incomplete. Copy the full video link."
+    monkeypatch.setattr(server, "list_drives", lambda: 1 / 0)
+    r = client.get("/api/settings?drives=1", headers=EN).get_json()
+    assert r["error_code"] == "engine_internal" and r["error"].startswith("The download engine ran into an error")
+
+
+def test_info_failure_uses_friendly_error(client, monkeypatch):
+    class Boom:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise server.yt_dlp.utils.DownloadError(
+                "ERROR: [youtube] jNQXAC9IVRw: Sign in to confirm your age. This video may be inappropriate for "
+                "some users. Use --cookies-from-browser or --cookies for the authentication.")
+
+    monkeypatch.setattr(server.yt_dlp, "YoutubeDL", Boom)
+    zh = client.post("/api/info", json={"url": YT + "w"}).get_json()
+    en = client.post("/api/info", json={"url": YT + "w"}, headers=EN).get_json()
+    assert zh["error_code"] == en["error_code"] == "age_restricted"
+    assert zh["error_action"] == "open_cookie_settings" and zh["error_faq"] == "err-age-restricted"
+    assert "--" not in zh["error"] and "--" not in en["error"]
+    assert "--cookies-from-browser" in zh["error_detail"], "原文要完整保留在 error_detail"
+    assert en["error"].startswith("This video is age-restricted")
+
+
+def test_job_stores_codes_and_renders_per_request(scripted, client, jobs):
+    def script(y):
+        raise server.yt_dlp.utils.DownloadError("ERROR: Requested format is not available. Use --list-formats")
+
+    scripted.script = script
+    job = jobs(new_job())
+    server.run_job(job)
+    data = saved(job)
+    assert data["error_code"] == "format_unavailable" and data["stage_code"] == "failed"
+    assert data["error_params"]["detail"].startswith("Requested format is not available")
+    zh = client.get(f"/api/jobs/{job.id}").get_json()
+    en = client.get(f"/api/jobs/{job.id}", headers=EN).get_json()
+    assert zh["stage"] == "失敗" and en["stage"] == "Failed"
+    assert zh["error"].startswith("指定的畫質或格式已不存在") and en["error"].startswith("The selected quality")
+    assert zh["error_action"] == en["error_action"] == "reanalyze"
+    restored = server.Job.load(job.dir / server.JOB_META)  # 重開後切成英文，舊工作的訊息也跟著變
+    assert restored.to_dict(lang="en")["error"] == en["error"]
+
+
+def test_stage_text_follows_language(scripted):
+    seen = {}
+
+    def script(y):
+        y.progress(10, fid="137")
+        seen["zh"] = job.to_dict(lang="zh")["stage"]
+        seen["en"] = job.to_dict(lang="en")["stage"]
+        seen["code"] = (job.stage_code, job.stage_params)
+        y.finish()
+
+    scripted.script = script
+    job = new_job()
+    server.run_job(job)
+    assert seen == {"zh": "下載中 137", "en": "Downloading 137", "code": ("downloading", {"format_id": "137"})}
+    assert job.to_dict(lang="en")["stage"] == "Done"
+
+
+def test_disk_full_points_to_storage_settings(scripted, monkeypatch):
+    """ERR5：空間不足的訊息指向「設定 → 儲存位置」，不再是「下載佇列上方」。"""
+    monkeypatch.setattr(server, "disk_info", lambda p: {"path": str(p), "free": 100, "total": 0})
+    job = new_job()
+    server.run_job(job)
+    zh, en = job.to_dict(lang="zh"), job.to_dict(lang="en")
+    assert zh["error_code"] == "disk_full" and zh["error_action"] == "open_storage_settings"
+    assert "設定 → 儲存位置" in zh["error"] and "下載佇列上方" not in zh["error"]
+    assert "Settings → Storage location" in en["error"] and zh["stage"] == "磁碟空間不足" and en["stage"] == "Disk full"
+
+
+def test_http_403_suggests_update_when_newer_ytdlp_exists(scripted, monkeypatch):
+    scripted.script = lambda y: (_ for _ in ()).throw(
+        server.yt_dlp.utils.DownloadError("ERROR: unable to download video data: HTTP Error 403: Forbidden"))
+    job = new_job()
+    server.run_job(job)
+    assert job.to_dict()["error_action"] == "resume"
+    monkeypatch.setitem(server.UPDATE_STATE, "ready", "2099.1.1")
+    assert job.to_dict()["error_action"] == "update_ytdlp"
+
+
+def test_option_errors_are_bilingual(client):
+    body = {"url": YT + "w", "options": {"mode": "av", "extras": {"sections": "abc"}}}
+    zh = client.post("/api/download", json=body).get_json()
+    en = client.post("/api/download", json=body, headers=EN).get_json()
+    assert zh["error"] == "時間範圍格式錯誤：abc（例：1:30-2:45）"
+    assert en["error"] == "Invalid time range: abc (example: 1:30-2:45)"
+
+
+def test_interrupted_job_message_is_bilingual(tmp_path):
+    d = tmp_path / "abc"
+    (d / ".tmp").mkdir(parents=True)
+    (d / ".tmp" / "a.mp4.part").write_bytes(b"x" * 2048)
+    (d / server.JOB_META).write_text(json.dumps({"url": "https://x", "options": {}, "status": "downloading"}),
+                                     encoding="utf-8")
+    job = server.Job.load(d / server.JOB_META)
+    zh, en = job.to_dict(lang="zh"), job.to_dict(lang="en")
+    assert zh["stage"] == "已中斷" and en["stage"] == "Interrupted"
+    assert zh["error_action"] == "resume" and "繼續下載" in zh["error"] and "Resume" in en["error"]
+
+
+def test_phase1_job_json_still_loads(tmp_path):
+    """第一階段（e11a991）寫的 job.json：舊的 stage_code、error_detail、文字型 warnings。"""
+    d = tmp_path / "p1"
+    d.mkdir()
+    (d / server.JOB_META).write_text(json.dumps({
+        "id": "p1", "url": "https://x", "options": {"playlist": True}, "title": "t", "status": "done",
+        "stage": "完成 2/3", "stage_code": "done_partial", "error": "完成 2/3，1 部無法下載",
+        "error_code": None, "error_detail": None, "error_action": None, "error_faq": None,
+        "warnings": ["1 部無法下載"], "done_count": 2, "total_count": 3,
+        "failed_items": [{"index": 2, "title": "影片 2", "id": "vid2", "error_code": "private_video",
+                          "error": "Private video", "error_detail": "[youtube] vid2: Private video"}],
+    }), encoding="utf-8")
+    job = server.Job.load(d / server.JOB_META)
+    v = job.to_dict(lang="en")
+    assert v["stage"] == "Done 2/3" and v["warnings"] == ["1 部無法下載"]
+    assert v["failed_items"][0]["error"].startswith("This is a private video")
+    (d / server.JOB_META).write_text(json.dumps({
+        "url": "https://x", "options": {}, "status": "error", "stage": "磁碟空間不足", "stage_code": "disk_full",
+        "error": "磁碟空間不足：D:\\ 只剩 1.0 GB", "error_code": "disk_full", "error_detail": "磁碟空間不足：D:\\ 只剩 1.0 GB",
+    }), encoding="utf-8")
+    job = server.Job.load(d / server.JOB_META)
+    v = job.to_dict(lang="en")
+    assert v["stage"] == "Disk full" and v["error_code"] == "disk_full" and "1.0 GB" in v["error_detail"]
+
+
+def test_v12_done_with_warning_job_json(tmp_path):
+    d = tmp_path / "old"
+    d.mkdir()
+    (d / server.JOB_META).write_text(json.dumps({
+        "url": "https://x", "options": {}, "status": "done", "stage": "完成（有警告）",
+        "error": "部分步驟失敗：Conversion failed!",
+    }), encoding="utf-8")
+    job = server.Job.load(d / server.JOB_META)
+    assert job.stage_code == "done_with_warnings" and job.error_code is None
+    v = job.to_dict(lang="en")
+    assert v["stage"] == "Done (with warnings)" and v["warnings"] == ["部分步驟失敗：Conversion failed!"]
+
+
+def test_steps_failed_warning_is_bilingual(scripted):
+    def script(y):
+        y.finish()
+        raise server.yt_dlp.utils.DownloadError("ERROR: Postprocessing: Conversion failed!")
+
+    scripted.script = script
+    job = new_job()
+    server.run_job(job)
+    assert job.status == "done" and job.stage_code == "done_with_warnings"
+    zh, en = job.to_dict(lang="zh"), job.to_dict(lang="en")
+    assert zh["warnings"][0].startswith("部分步驟失敗：下載完成，但「合併影音軌」等後製步驟失敗")
+    assert en["warnings"][0].startswith("Some steps failed: The download finished")
+    assert zh["error"] == zh["warnings"][0], "舊版 App 與網頁版從 error 顯示警告"
+
+
+def test_every_stage_code_has_text_in_both_languages():
+    for code in server.STAGE_CODES:
+        for lang in ("zh", "en"):
+            text = server.render_stage(code, {"format_id": "1", "attempt": 1, "max": 3, "s": 5, "done": 1,
+                                              "total": 2, "name": "Merger"}, lang)
+            assert text and text != code and "{" not in text, (code, lang)
+
+
+def test_every_engine_text_has_both_languages():
+    for key, entry in server.ENGINE_TEXT.items():
+        assert set(entry) == {"zh", "en"}, key
+        for lang in ("zh", "en"):
+            assert "--" not in entry[lang] and "github.com" not in entry[lang].lower(), (key, lang)
+
+
+def test_browser_requests_stay_chinese(client):
+    """網頁版是中文介面：瀏覽器一定會帶 Accept-Language，但有 Sec-Fetch-* 標頭時一律回中文。"""
+    browser = {"Accept-Language": "en-US,en;q=0.9", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "same-origin"}
+    assert client.get("/api/jobs/nope", headers=browser).get_json()["error"] == "找不到指定的工作或檔案"
+    assert client.get("/api/jobs/nope", headers=EN).get_json()["error"] == "The job or file wasn't found."
+
+
+def test_steps_failed_warning_keeps_raw_reason(scripted):
+    def script(y):
+        y.finish()
+        raise server.yt_dlp.utils.DownloadError("ERROR: Postprocessing: Conversion failed!")
+
+    scripted.script = script
+    job = new_job()
+    server.run_job(job)
+    assert job.warnings[0]["args"]["detail"] == "Postprocessing: Conversion failed!"
+    assert "Conversion failed" not in job.to_dict(lang="zh")["warnings"][0]
