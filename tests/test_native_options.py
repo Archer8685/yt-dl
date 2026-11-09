@@ -270,12 +270,21 @@ def test_set_mode_hides_sections(adv):
 
 
 def test_switch_toggles(app):
+    from PySide6.QtGui import QFont
+
     from native_options import Switch
     sw = Switch()
     assert not sw.isChecked()
     sw.click()
     assert sw.isChecked()
+    f = QFont(sw.font())
+    f.setPixelSize(13)  # 一般字級（字高 ≤ 17 px）；不依賴測試機器的預設字型
+    sw.setFont(f)
     assert (sw.sizeHint().width(), sw.sizeHint().height()) == (38, 22)  # macOS 開關尺寸
+    f.setPixelSize(26)  # 「文字大小」放大時等比放大，維持 38:22
+    sw.setFont(f)
+    w, h = sw.sizeHint().width(), sw.sizeHint().height()
+    assert h > 22 and abs(w / h - 38 / 22) < 0.05
 
 
 def test_hint_and_mono_follow_app_stylesheet(app):
