@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -12,12 +13,26 @@ import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QByteArray, QObject, QPointF, QRectF, QSettings, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
+import shiboken6
+from PySide6.QtCore import (
+    QT_TRANSLATE_NOOP,
+    QByteArray,
+    QCoreApplication,
+    QObject,
+    QPointF,
+    QRectF,
+    QSettings,
+    Qt,
+    QUrl,
+    Signal,
+)
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -25,28 +40,58 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
+import i18n
 from ytdlp_update import vtuple
 
-TITLE = "YT 下載器"
+_tr = QCoreApplication.translate  # 名稱固定是 _tr（docs/I18N.md 2.2）
+CTX = "native_common"  # 模組層級字串的翻譯 context
+
+# import 時就建立的字串只用 QT_TRANSLATE_NOOP 標記，顯示時再翻譯（docs/I18N.md 2.6）：
+# Segmented、PopUp 建立選項時會自動翻譯，其他地方用 tr_text() 或下面的函式（app_title()、file_manager()…）
+TITLE = QT_TRANSLATE_NOOP("native_common", "YT 下載器")
 IS_MAC = sys.platform == "darwin"
-FILE_MANAGER = "Finder" if IS_MAC else "檔案總管"
+FILE_MANAGER = "Finder" if IS_MAC else QT_TRANSLATE_NOOP("native_common", "檔案總管")
 BUNDLE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))  # 打包版的資源在 _MEIPASS
 VIBRANCY = False  # macOS 毛玻璃側邊欄是否啟用（mac_window_setup 成功時設為 True）
 SETTINGS_ORG, SETTINGS_APP = "YTDownloader", "NativeApp"
 
-MODES = [("av", "影片＋音訊"), ("video", "僅影片"), ("audio", "僅音訊"), ("subs", "字幕"), ("thumb", "縮圖")]
+MODES = [("av", QT_TRANSLATE_NOOP("native_common", "影片＋音訊")), ("video", QT_TRANSLATE_NOOP("native_common", "僅影片")),
+         ("audio", QT_TRANSLATE_NOOP("native_common", "僅音訊")), ("subs", QT_TRANSLATE_NOOP("native_common", "字幕")),
+         ("thumb", QT_TRANSLATE_NOOP("native_common", "縮圖"))]
 QUALITIES = [(2160, "4K"), (1440, "1440p"), (1080, "1080p"), (720, "720p"), (480, "480p"), (360, "360p")]
 CONTAINERS = [("mp4", "MP4"), ("mkv", "MKV"), ("webm", "WebM"), ("mov", "MOV")]
-AUDIO_CODECS = [("mp3", "MP3"), ("m4a", "M4A"), ("opus", "Opus"), ("flac", "FLAC（無損）"), ("wav", "WAV（無損）"),
-                ("best", "原始格式（不轉檔）")]
-AUDIO_QUALITY = [("0", "最佳"), ("320k", "320 kbps"), ("256k", "256 kbps"), ("192k", "192 kbps"), ("128k", "128 kbps")]
-STATUS_TEXT = {"queued": "排隊中", "downloading": "下載中", "processing": "處理中", "done": "已完成",
-               "error": "失敗", "cancelled": "已取消"}
+AUDIO_CODECS = [("mp3", "MP3"), ("m4a", "M4A"), ("opus", "Opus"), ("flac", QT_TRANSLATE_NOOP("native_common", "FLAC（無損）")),
+                ("wav", QT_TRANSLATE_NOOP("native_common", "WAV（無損）")),
+                ("best", QT_TRANSLATE_NOOP("native_common", "原始格式（不轉檔）"))]
+AUDIO_QUALITY = [("0", QT_TRANSLATE_NOOP("native_common", "最佳")), ("320k", "320 kbps"), ("256k", "256 kbps"),
+                 ("192k", "192 kbps"), ("128k", "128 kbps")]
+STATUS_TEXT = {"queued": QT_TRANSLATE_NOOP("native_common", "排隊中"),
+               "downloading": QT_TRANSLATE_NOOP("native_common", "下載中"),
+               "processing": QT_TRANSLATE_NOOP("native_common", "處理中"),
+               "done": QT_TRANSLATE_NOOP("native_common", "已完成"),
+               "error": QT_TRANSLATE_NOOP("native_common", "失敗"),
+               "cancelled": QT_TRANSLATE_NOOP("native_common", "已取消")}
 ACTIVE = ("queued", "downloading", "processing")  # 和 server.ACTIVE 相同（有測試確認）
+
+
+def tr_text(text: str) -> str:
+    """把本模組用 QT_TRANSLATE_NOOP 標記的常數翻成目前的介面語言（不是本模組的字串原樣回傳）。"""
+    return _tr(CTX, text) if text else text
+
+
+def app_title() -> str:
+    """App 名稱（視窗標題、對話框標題用）。TITLE 是 import 時的原文，顯示時請用這個。"""
+    return _tr(CTX, TITLE)
+
+
+def file_manager() -> str:
+    """系統的檔案管理程式名稱（「在檔案總管中顯示」）。"""
+    return _tr(CTX, FILE_MANAGER)
 
 
 # --------------------------------------------------------------------------- #
@@ -66,7 +111,8 @@ def tokens(dark: bool) -> dict[str, str]:
                 "button": "#555558", "button_border": "#1AFFFFFF", "button_shadow": "#73000000",
                 "button_pressed": "#68686C", "focus": "#8C0A84FF"}
     return {"bg": "#F5F5F7", "sidebar": "#EAEAEC", "toolbar": "#F5F5F7", "card": "#FFFFFF", "field": "#FFFFFF",
-            "text": "#1D1D1F", "secondary": "#86868B", "tertiary": "#B0B0B5", "sep": "#17000000",
+            # secondary：SET10 從 #86868B 加深，白底與 #F5F5F7 底的對比度都超過 4.5:1（WCAG AA）
+            "text": "#1D1D1F", "secondary": "#6E6E73", "tertiary": "#B0B0B5", "sep": "#17000000",
             "border": "#21000000", "accent": "#007AFF", "accent_hover": "#0068E0", "accent_text": "#FFFFFF",
             "select": "#14000000", "seg": "#0F000000", "seg_on": "#FFFFFF", "track": "#14000000",
             "red": "#FF3B30", "green": "#28CD41", "orange": "#FF9500", "hover": "#0A000000",
@@ -74,8 +120,10 @@ def tokens(dark: bool) -> dict[str, str]:
             "button_pressed": "#EDEDED", "focus": "#80007AFF"}
 
 
-THEMES = [("system", "跟隨系統"), ("light", "淺色"), ("dark", "深色")]
-FONT_SIZES = [("small", "小"), ("medium", "中"), ("large", "大")]
+THEMES = [("system", QT_TRANSLATE_NOOP("native_common", "跟隨系統")), ("light", QT_TRANSLATE_NOOP("native_common", "淺色")),
+          ("dark", QT_TRANSLATE_NOOP("native_common", "深色"))]
+FONT_SIZES = [("small", QT_TRANSLATE_NOOP("native_common", "小")), ("medium", QT_TRANSLATE_NOOP("native_common", "中")),
+              ("large", QT_TRANSLATE_NOOP("native_common", "大"))]
 FONT_SCALE = {"small": 0.88, "medium": 1.0, "large": 1.18}
 
 
@@ -171,10 +219,15 @@ def stylesheet(t: dict[str, str], chevron: str, scale: float = 1.0) -> str:
     #segment {{ background: transparent; border: none; border-radius: 5px; padding: 2px 12px; min-height: 18px; }}
     #segment:checked {{ background: {t['seg_on']}; border: 1px solid {t['button_border']};
                         border-bottom: 1px solid {t['button_shadow']}; }}
+    #navButton:focus {{ border: 2px solid {t['focus']}; padding: 2px 6px; }}
+    #segment:focus {{ border: 2px solid {t['focus']}; padding: 0 10px; }}
     QScrollArea {{ background: transparent; border: none; }}
-    #banner {{ background: {t['card']}; border: 1px solid {t['sep']}; border-radius: 8px; padding: 8px 12px;
-               color: {t['text']}; }}
-    #banner[error="true"] {{ color: {t['red']}; }}
+    #banner {{ background: {t['card']}; border: 1px solid {t['sep']}; border-radius: 8px; }}
+    #banner[error="true"] {{ border: 1px solid {t['red']}; }}
+    #bannerTitle {{ font-weight: 600; color: {t['text']}; }}
+    #bannerTitle[error="true"] {{ color: {t['red']}; }}
+    #bannerBody {{ color: {t['text']}; }}
+    #bannerClose {{ background: transparent; border: none; color: {t['secondary']}; padding: 0 4px; min-height: 0; }}
     """
     return base if IS_MAC else base + _controls_qss(t, chevron)
 
@@ -252,10 +305,10 @@ def fmt_eta(sec) -> str:
         return ""
     sec = int(sec)
     if sec >= 3600:
-        return f"剩 {sec // 3600} 小時 {sec % 3600 // 60} 分"
+        return _tr("native_common", "剩 {h} 小時 {m} 分").format(h=sec // 3600, m=sec % 3600 // 60)
     if sec >= 60:
-        return f"剩 {sec // 60} 分 {sec % 60} 秒"
-    return f"剩 {sec} 秒"
+        return _tr("native_common", "剩 {m} 分 {s} 秒").format(m=sec // 60, s=sec % 60)
+    return _tr("native_common", "剩 %n 秒", None, sec)
 
 
 MEDIA_EXT = (".mp4", ".m4v", ".webm", ".mkv", ".mov", ".mp3", ".m4a", ".aac", ".flac", ".m3u8", ".mpd")
@@ -321,13 +374,44 @@ def newer(latest: str | None, current: str | None) -> bool:
 # --------------------------------------------------------------------------- #
 #  引擎 API
 # --------------------------------------------------------------------------- #
-NOT_ENGINE = "下載引擎沒有正確回應（連接埠可能被其他程式佔用）"
+# 連到的程式不是下載引擎（/api/meta 沒有版本資訊）：只有啟動檢查（MainWindow.check_engine）用這句
+NOT_ENGINE = QT_TRANSLATE_NOOP("native_common", "這個連接埠上的程式不是 YT 下載器的下載引擎")
+# 引擎回了不是 JSON 的內容（例如當掉時的錯誤頁）。不再說「連接埠被佔用」：引擎確實在執行，只是這次沒有正確回應
+NOT_JSON = QT_TRANSLATE_NOOP("native_common", "下載引擎回應了無法辨識的內容，請稍後再試")
+
+_NETWORK_ERRORS = {
+    QNetworkReply.NetworkError.ConnectionRefusedError: QT_TRANSLATE_NOOP("native_common", "下載引擎沒有在執行"),
+    QNetworkReply.NetworkError.RemoteHostClosedError: QT_TRANSLATE_NOOP("native_common", "下載引擎中斷了連線"),
+    QNetworkReply.NetworkError.HostNotFoundError: QT_TRANSLATE_NOOP("native_common", "找不到下載引擎"),
+    QNetworkReply.NetworkError.TimeoutError: QT_TRANSLATE_NOOP("native_common", "下載引擎太久沒有回應"),
+    QNetworkReply.NetworkError.OperationCanceledError: QT_TRANSLATE_NOOP("native_common", "下載引擎太久沒有回應"),
+}
+
+
+class ApiError(str):
+    """Api 的 err 回呼收到的錯誤：就是要顯示的訊息字串（舊程式照常當字串用），
+    另外在 .payload 帶著引擎回傳的整個錯誤物件（error_code、error_detail、error_action、error_faq…；
+    不是引擎回的錯誤時是空的 dict），.status 是 HTTP 狀態碼（沒有回應時是 0）。"""
+    payload: dict
+    status: int
+
+    def __new__(cls, message: str, payload: dict | None = None, status: int = 0):
+        obj = super().__new__(cls, message)
+        obj.payload = dict(payload or {})
+        obj.status = status
+        return obj
+
+    @property
+    def code(self) -> str:
+        return str(self.payload.get("error_code") or "")
 
 
 class Api:
     """非同步呼叫本機引擎（QNetworkAccessManager，不會卡住介面）。
 
-    ok(payload) 只會收到 JSON；HTTP 錯誤、引擎回的 {"error": …}、不是 JSON 的回應都走 err(訊息)。
+    ok(payload) 只會收到 JSON；HTTP 錯誤、引擎回的 {"error": …}、不是 JSON 的回應都走 err(ApiError)。
+    ApiError 是 str 的子類別（舊的呼叫方式照用），引擎的錯誤物件放在 .payload（ERR1）。
+    每個請求都帶 Accept-Language，引擎依介面語言回傳訊息（E1）。
     timeout_ms=0 表示不限時間（例如解析很大的播放清單）。
     """
 
@@ -339,24 +423,28 @@ class Api:
         req = QNetworkRequest(QUrl(self.base + path))
         req.setTransferTimeout(timeout_ms)
         req.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")
+        req.setRawHeader(b"Accept-Language", i18n.accept_language().encode("ascii"))
         data = QByteArray(json.dumps(body or {}).encode()) if method in ("POST", "DELETE") else None
         reply = self.net.sendCustomRequest(req, method.encode(), data) if data is not None else self.net.get(req)
 
         def done():
             raw = bytes(reply.readAll())
-            failed = reply.error() != QNetworkReply.NoError
+            code = reply.error()
+            failed = code != QNetworkReply.NoError
             message = reply.errorString()
+            status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute) or 0
             reply.deleteLater()
             try:
                 payload = json.loads(raw) if raw else None
             except ValueError:
                 payload = None
             if isinstance(payload, dict) and payload.get("error"):
-                err and err(str(payload["error"]))
-            elif failed:
-                err and err(message)
-            elif payload is None:
-                err and err(NOT_ENGINE)
+                err and err(ApiError(str(payload["error"]), payload, status))
+            elif failed and not status:  # 連不上、逾時：沒有收到任何 HTTP 回應
+                text = _NETWORK_ERRORS.get(code)
+                err and err(ApiError(_tr(CTX, text) if text else message, None, 0))
+            elif failed or payload is None:  # 有回應但不是引擎的 JSON（錯誤頁、空白）
+                err and err(ApiError(_tr(CTX, NOT_JSON), None, status))
             else:
                 ok and ok(payload)
 
@@ -436,6 +524,111 @@ def hairline() -> QFrame:
     return f
 
 
+def repolish(*widgets: QWidget):
+    """改了動態屬性（setProperty）後讓樣式表重新套用。"""
+    for w in widgets:
+        w.style().unpolish(w)
+        w.style().polish(w)
+
+
+class Banner(QFrame):
+    """提示列：粗體標題（可省略）＋說明文字＋動作按鈕，右邊可以「複製」「關閉」（ERR6、ERR8）。
+
+    主視窗用它顯示引擎離線、儲存位置無法存取，以及 toast。按動作按鈕會呼叫對應的函式；
+    dismiss_on_action=True 時（toast）按完同時關閉提示列。
+    """
+    closed = Signal()
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("banner")
+        self.setProperty("error", False)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 8, 8, 8)
+        lay.setSpacing(8)
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        self.title = label("", "bannerTitle", wrap=True, plain=True)
+        self.title.setProperty("error", False)
+        self.body = label("", "bannerBody", wrap=True, plain=True)
+        self.body.setTextInteractionFlags(Qt.TextSelectableByMouse)  # 錯誤訊息可以選取、複製
+        text.addWidget(self.title)
+        text.addWidget(self.body)
+        lay.addLayout(text, 1)
+        self.actions_box = QHBoxLayout()
+        self.actions_box.setSpacing(6)
+        lay.addLayout(self.actions_box)
+        self.copy_btn = QPushButton(self.tr("複製"))
+        self.copy_btn.setAccessibleName(self.tr("複製訊息"))
+        self.copy_btn.clicked.connect(self.copy)
+        lay.addWidget(self.copy_btn, 0, Qt.AlignTop)
+        self.close_btn = QPushButton("✕")
+        self.close_btn.setObjectName("bannerClose")
+        self.close_btn.setAccessibleName(self.tr("關閉提示"))
+        self.close_btn.setToolTip(self.tr("關閉"))
+        self.close_btn.setCursor(Qt.PointingHandCursor)
+        self.close_btn.clicked.connect(self.dismiss)
+        lay.addWidget(self.close_btn, 0, Qt.AlignTop)
+        self.action_buttons: list[QPushButton] = []
+        self._retired: list[QPushButton] = []
+        self._shown: tuple | None = None
+        self.hide()
+
+    def show_message(self, body: str, title: str = "", *, error: bool = False, actions=(),
+                     copyable: bool = False, closable: bool = True, dismiss_on_action: bool = False):
+        """actions：[(按鈕文字, 函式), …]。
+
+        內容和目前顯示的完全一樣時不重建（定時檢查會一直送同樣的提示：按到一半的按鈕不能被換掉）。"""
+        key = (body, title, bool(error), tuple(actions or ()), copyable, closable, dismiss_on_action)
+        if not self.isHidden() and key == self._shown:
+            return
+        self._shown = key
+        self.setProperty("error", bool(error))
+        self.title.setProperty("error", bool(error))
+        repolish(self, self.title)
+        self.title.setText(title)
+        self.title.setVisible(bool(title))
+        self.body.setText(body)
+        self.body.setVisible(bool(body))
+        # 舊的按鈕：這次先藏起來，下一次才刪。可能正在處理它自己的 clicked（按鈕的動作又顯示了新提示），
+        # 不能馬上刪；也不用 deleteLater（提示列先被回收時，排程中的刪除會在 PySide 裡重複釋放而當掉）
+        for b in self._retired:
+            if shiboken6.isValid(b):
+                shiboken6.delete(b)
+        self._retired = []
+        for b in self.action_buttons:
+            b.hide()
+            self.actions_box.removeWidget(b)
+            self._retired.append(b)
+        self.action_buttons = []
+        for text, callback in actions or ():
+            b = QPushButton(text)
+
+            def run(_=False, callback=callback):
+                if dismiss_on_action:
+                    self.dismiss()
+                callback()
+            b.clicked.connect(run)
+            self.actions_box.addWidget(b, 0, Qt.AlignTop)
+            self.action_buttons.append(b)
+        self.copy_btn.setVisible(copyable)
+        self.close_btn.setVisible(closable)
+        self.setAccessibleName(title or body)
+        self.show()
+
+    def text(self) -> str:
+        """目前顯示的完整文字（標題＋說明）。"""
+        return "\n".join(t for t in (self.title.text(), self.body.text()) if t)
+
+    def copy(self):
+        QGuiApplication.clipboard().setText(self.text())
+
+    def dismiss(self):
+        if not self.isHidden():
+            self.hide()
+            self.closed.emit()
+
+
 class Segmented(QFrame):
     """macOS 分段控制。"""
     changed = Signal(str)
@@ -449,7 +642,7 @@ class Segmented(QFrame):
         self.group = QButtonGroup(self)
         self.buttons: dict[str, QPushButton] = {}
         for key, text in items:
-            b = QPushButton(text)
+            b = QPushButton(tr_text(text))  # 本模組的常數（MODES、THEMES…）在這裡翻譯；其他文字原樣
             b.setObjectName("segment")
             b.setCheckable(True)
             b.clicked.connect(lambda _=False, k=key: self.changed.emit(k))
@@ -477,7 +670,7 @@ class PopUp(QComboBox):
         self.blockSignals(True)
         self.clear()
         for value, text in items:
-            self.addItem(text, value)
+            self.addItem(tr_text(text) if isinstance(text, str) else text, value)
         for want in (current, prefer):
             idx = self.findData(want) if want is not None else -1
             if idx >= 0:
@@ -493,11 +686,20 @@ class PopUp(QComboBox):
 
 
 def form_row(title: str, widget: QWidget) -> QWidget:
+    """設定畫面的一列：左邊標題、右邊控制項。
+
+    A11Y1：標題設成控制項的 buddy（按標題會把焦點移到控制項），控制項沒有無障礙名稱時用標題當名稱，
+    朗讀程式才會念「儲存位置，按鈕」而不是只念按鈕上的字。
+    """
     w = QWidget()
     w.setObjectName("row")
     lay = QHBoxLayout(w)
     lay.setContentsMargins(14, 7, 14, 7)
-    lay.addWidget(label(title))
+    title_label = label(title)
+    title_label.setBuddy(widget)
+    if title and not widget.accessibleName():
+        widget.setAccessibleName(title)
+    lay.addWidget(title_label)
     lay.addStretch()
     lay.addWidget(widget)
     return w
@@ -571,6 +773,7 @@ def page_scroll(inner: QWidget) -> QScrollArea:
     sc.setWidgetResizable(True)
     sc.setFrameShape(QFrame.NoFrame)
     sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 內容跟著視窗寬度縮放，不左右捲動
+    sc.setFocusPolicy(Qt.NoFocus)  # A11Y2：捲動區本身不吃 Tab，焦點直接跳到裡面的控制項
     sc.setWidget(inner)
     inner.setObjectName("content")
     return sc
@@ -599,17 +802,87 @@ DISCLAIMER_URL = "https://github.com/Archer8685/yt-dl/blob/main/DISCLAIMER.md"
 # 免責聲明內容有實質變更時把這個數字加一：已同意舊版的使用者下次開啟會再看到一次
 DISCLAIMER_VERSION = "1"
 DISCLAIMER_KEY = "legal/accepted_version"
-DISCLAIMER_SHORT = ("YT 下載器只是下載工具，不提供、不託管任何影音內容，與 YouTube／Google 無任何關聯。\n"
-                    "請只下載你有權使用的內容，並遵守著作權法與各平台服務條款；不得用於侵權、散布盜版，"
-                    "或規避付費、DRM 等保護措施。使用者須自行承擔使用責任；本軟體以「現狀」提供，不提供任何保證。")
+DISCLAIMER_SHORT = QT_TRANSLATE_NOOP(
+    "native_common",
+    "YT 下載器只是下載工具，不提供、不託管任何影音內容，與 YouTube／Google 無任何關聯。\n"
+    "請只下載你有權使用的內容，並遵守著作權法與各平台服務條款；不得用於侵權、散布盜版，"
+    "或規避付費、DRM 等保護措施。使用者須自行承擔使用責任；本軟體以「現狀」提供，不提供任何保證。")
+DISCLAIMER_FILE = "DISCLAIMER.md"
+DISCLAIMER_EN_ANCHOR = "disclaimer-english"  # DISCLAIMER.md 裡英文段落開頭的 <a id="…">
+
+
+def disclaimer_points() -> list[str]:
+    """第一次開啟時的使用聲明重點（SET11：三點條列）。"""
+    return [
+        _tr("native_common", "YT 下載器只是下載工具，不提供、不託管任何影音內容，與 YouTube／Google 無任何關聯。"),
+        _tr("native_common", "請只下載你有權使用的內容，並遵守著作權法與各平台服務條款；"
+                             "不得用於侵權、散布盜版，或規避付費、DRM 等保護措施。"),
+        _tr("native_common", "使用責任由使用者自行承擔；本軟體以「現狀」提供，不提供任何保證。"),
+    ]
+
+
+def disclaimer_markdown(lang: str | None = None, path: Path | None = None) -> str | None:
+    """已打包的 DISCLAIMER.md 裡目前介面語言的那一段（中文或英文）；找不到檔案時回傳 None。"""
+    path = path or BUNDLE / DISCLAIMER_FILE
+    try:
+        md = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    marker = f'<a id="{DISCLAIMER_EN_ANCHOR}"></a>'
+    zh, sep, en = md.partition(marker)
+    lang = lang or i18n.current_language()
+    part = en if lang == i18n.EN and sep else zh
+    lines = [ln for ln in part.strip().splitlines() if not ln.lstrip().startswith("> [English")]
+    while lines and lines[-1].strip() in ("", "---"):
+        lines.pop()
+    return "\n".join(lines).strip() + "\n"
+
+
+def disclaimer_url(lang: str | None = None) -> str:
+    """完整聲明在 GitHub 上的網址（App 裡沒有打包 DISCLAIMER.md 時用）。"""
+    lang = lang or i18n.current_language()
+    return DISCLAIMER_URL + (f"#{DISCLAIMER_EN_ANCHOR}" if lang == i18n.EN else "")
+
+
+class DisclaimerDialog(QDialog):
+    """「查看完整聲明」：在 App 裡用可捲動的視窗顯示已打包的 DISCLAIMER.md（依介面語言顯示中文或英文段落）。"""
+
+    def __init__(self, markdown: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle(self.tr("{app}：完整使用聲明").format(app=app_title()))
+        self.setMinimumSize(520, 420)
+        self.resize(640, 560)
+        lay = QVBoxLayout(self)
+        self.browser = QTextBrowser()
+        self.browser.setOpenExternalLinks(True)
+        self.browser.setMarkdown(markdown)
+        self.browser.setAccessibleName(self.tr("完整使用聲明"))
+        lay.addWidget(self.browser, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.button(QDialogButtonBox.Close).setText(self.tr("關閉"))
+        lay.addWidget(buttons)
+
+
+def show_full_disclaimer(parent: QWidget | None = None, run=None) -> bool:
+    """顯示完整聲明。有打包 DISCLAIMER.md 就開 App 內的對話框（回傳 True），沒有就用瀏覽器開 GitHub 上的版本。
+    run(dialog) 負責顯示對話框（預設 dialog.exec()），測試用。"""
+    md = disclaimer_markdown()
+    if md is None:
+        QDesktopServices.openUrl(QUrl(disclaimer_url()))
+        return False
+    dlg = DisclaimerDialog(md, parent)
+    (run or (lambda d: d.exec()))(dlg)
+    shiboken6.delete(dlg)  # 不用 deleteLater：沒有父物件的視窗由 Python 擁有，排程刪除可能重複釋放
+    return True
 
 
 def app_version() -> str:
     """App 的版本：開發時讀專案的 VERSION，打包版讀 build_app.py 放進去的 VERSION。"""
     try:
-        return (BUNDLE / "VERSION").read_text(encoding="utf-8").strip() or "開發版"
+        return (BUNDLE / "VERSION").read_text(encoding="utf-8").strip() or _tr("native_common", "開發版")
     except OSError:
-        return "開發版"
+        return _tr("native_common", "開發版")
 
 
 def disclaimer_needed() -> bool:
@@ -627,14 +900,19 @@ def disclaimer_box(parent: QWidget | None = None) -> tuple[QMessageBox, QPushBut
     """第一次開啟時的免責聲明對話框；回傳 (對話框, 「我了解並同意」按鈕)。"""
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Information)
-    box.setWindowTitle(f"{TITLE} — 使用聲明")
-    box.setText("使用前請閱讀")
+    box.setWindowTitle(_tr("native_common", "{app}：使用聲明").format(app=app_title()))
+    box.setText(_tr("native_common", "使用前請閱讀"))
     box.setTextFormat(Qt.RichText)
-    body = DISCLAIMER_SHORT.replace("\n", "<br><br>")
-    # informative 標籤的連結 Qt 預設就可以點、用預設瀏覽器打開（openExternalLinks）
-    box.setInformativeText(f"{body}<br><br><a href=\"{DISCLAIMER_URL}\">查看完整免責聲明</a>")
-    accept = box.addButton("我了解並同意", QMessageBox.AcceptRole)
-    leave = box.addButton("離開", QMessageBox.RejectRole)
+    points = "".join(f"<li style=\"margin-bottom:6px\">{html.escape(p)}</li>" for p in disclaimer_points())
+    link = _tr("native_common", '<a href="{url}">查看完整聲明</a>').format(url=html.escape(disclaimer_url(), quote=True))
+    box.setInformativeText(f"<ul style=\"margin-left:-20px\">{points}</ul>{link}")
+    # 連結改在 App 裡開捲動的對話框（SET11）；沒有打包 DISCLAIMER.md 時 show_full_disclaimer 會改用瀏覽器開
+    info = box.findChild(QLabel, "qt_msgbox_informativelabel")
+    if info is not None:
+        info.setOpenExternalLinks(False)
+        info.linkActivated.connect(lambda _url: show_full_disclaimer(box))
+    accept = box.addButton(_tr("native_common", "我了解並同意"), QMessageBox.AcceptRole)
+    leave = box.addButton(_tr("native_common", "離開"), QMessageBox.RejectRole)
     box.setDefaultButton(accept)
     box.setEscapeButton(leave)  # Esc 或關閉視窗都當成「離開」
     return box, accept
@@ -652,7 +930,7 @@ def confirm_disclaimer(parent: QWidget | None = None, run=None) -> bool:
     ok = box.clickedButton() is accept
     if ok:
         settings_store().setValue(DISCLAIMER_KEY, DISCLAIMER_VERSION)
-    box.deleteLater()
+    shiboken6.delete(box)
     return ok
 
 
