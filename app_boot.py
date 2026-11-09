@@ -131,8 +131,8 @@ def start_engine(server):
     threading.Thread(target=server.app.run, daemon=True, kwargs={
         "host": server.HOST, "port": server.PORT, "threaded": True, "debug": False, "use_reloader": False,
     }).start()
-    overlay = "，自動更新版" if server.YTDLP_OVERLAY else ""
-    print(f"YT 下載器引擎啟動於 {url}（yt-dlp {server.yt_dlp.version.__version__}{overlay}）", flush=True)
+    print(f"YT 下載器引擎啟動於 {url}（yt-dlp {server.yt_dlp.version.__version__}"
+          f"{'，自動更新版' if server.YTDLP_OVERLAY else ''}）", flush=True)  # 只寫進紀錄，不翻譯
     return url, server._busy
 
 

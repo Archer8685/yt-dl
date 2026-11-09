@@ -120,6 +120,55 @@ def test_length_limit():
     assert parse_handoff("https://example.com/" + "a" * 1_000_000) is None
 
 
+LOOPBACK = [
+    "http://localhost/admin", "http://LOCALHOST:8765/api/jobs", "http://localhost./", "http://app.localhost/",
+    "http://127.0.0.1:5000/", "http://127.8.9.10/", "http://127.1/", "http://2130706433/", "http://2130706432/",
+    "http://0x7f.0.0.1/",
+    "http://0177.0.0.1/", "http://0x7f000001/", "http://127.0.0.1./", "http://0.0.0.0:8765/", "http://0/",
+    "http://[::1]/", "http://[0:0:0:0:0:0:0:1]:8080/", "http://[::]/", "http://[::ffff:127.0.0.1]/",
+    "http://[::ffff:7f00:1]/", "http://%31%32%37.0.0.1/", "http://１２７．０．０．１/", "http://127。0。0。1/",
+]
+
+
+@pytest.mark.parametrize("url", LOOPBACK)
+def test_ytdl_rejects_loopback(url):
+    """ytdl:// 是任何網頁都能觸發的：不能拿來叫 App 去連這台電腦上的服務（v13-followups「給 D」）。"""
+    assert parse_handoff(f"ytdl://add?url={enc(url)}") is None
+    assert parse_handoff(QUrl(f"ytdl://add?url={enc(url)}")) is None
+
+
+@pytest.mark.parametrize("url", ["http://localhost:8080/video.mp4", "http://127.0.0.1/v", "http://[::1]/v"])
+def test_direct_loopback_url_still_accepted(url):
+    """命令列、拖到 App 圖示上是使用者自己的動作（例如測試本機的影片伺服器），照舊放行。"""
+    assert parse_handoff(url) == url
+
+
+@pytest.mark.parametrize("url", [
+    "https://127.example.com/v", "https://localhost.example.com/v", "https://1.2.3.4/v",
+    "https://128.0.0.1/v", "https://192.168.1.10/v", "https://[2001:db8::1]/v", "https://youtube.com./watch?v=x",
+    "https://0x7f.example/v", "https://2130706431/v",  # 2130706431 = 126.255.255.255（127.0.0.0 的前一個）
+])
+def test_ytdl_accepts_non_loopback(url):
+    assert parse_handoff(f"ytdl://add?url={enc(url)}") == url
+
+
+def test_is_loopback_host_edge_cases():
+    from url_handoff import is_loopback_host
+    assert is_loopback_host("127.255.255.255")
+    assert not is_loopback_host("127.0.0.1.1")  # 五段：不是 IPv4，是一般主機名稱
+    assert not is_loopback_host("256.0.0.1") and not is_loopback_host("")
+    assert not is_loopback_host("fe80::1%eth0") and is_loopback_host("::1%lo")
+    # int() 會接受的奇怪寫法不能讓它丟例外（負數會讓 IPv4Address 丟 ValueError）
+    for host in ("-1", "0x-1", "+127.0.0.1", "1_27.0.0.1", "-1.0.0.1", "0x", "٣"):
+        assert is_loopback_host(host) in (True, False), host
+
+
+@pytest.mark.parametrize("host", ["-1", "0x-1", "-1.0.0.1", "+1"])
+def test_odd_numeric_hosts_do_not_crash(host):
+    url = f"http://{host}/v"
+    assert parse_handoff(f"ytdl://add?url={enc(url)}") in (url, None)
+
+
 def test_parse_args_filters_and_dedupes():
     args = ["--smoke-test", f"ytdl://add?url={enc(YT)}", YT, "javascript:alert(1)", "https://example.com/b"]
     assert parse_handoff_args(args) == [YT, "https://example.com/b"]
