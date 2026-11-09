@@ -1,6 +1,6 @@
 name: Release app
 
-# 把下載器打包成桌面 App（Windows 安裝精靈、macOS .dmg），實際安裝後做啟動測試，再發布到 GitHub Releases。
+# 把下載器打包成桌面 App（Windows 安裝精靈、macOS .dmg），實際安裝後做啟動測試，再連同 SHA256SUMS.txt 發布到 GitHub Releases。
 # 版本號在 VERSION 檔：改了版本號並 push 才會發布 v<版本>；同一版只發布一次。
 # yt-dlp 由 App 自己從 PyPI 自動更新，不需要為了 yt-dlp 重新打包。
 on:
@@ -68,11 +68,23 @@ jobs:
           $setup = Get-Item dist/YT-Downloader-Setup-Windows.exe
           Start-Process $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/CURRENTUSER","/DIR=$env:RUNNER_TEMP\app","/NORESTART" -Wait
           "APP_EXE=$env:RUNNER_TEMP\app\YT-Downloader.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          # 授權檔要裝在安裝資料夾最上層；ytdl:// 協定要註冊到 App（書籤小工具用）
+          foreach ($f in "LICENSE.txt", "THIRD_PARTY_NOTICES.md", "_internal\LICENSE", "_internal\THIRD_PARTY_NOTICES.md") {
+            if (-not (Test-Path "$env:RUNNER_TEMP\app\$f")) { throw "安裝資料夾裡沒有 $f" }
+          }
+          $cmd = (Get-ItemProperty "HKCU:\Software\Classes\ytdl\shell\open\command").'(default)'
+          if ($cmd -notlike '*YT-Downloader.exe" "%1"') { throw "ytdl:// 沒有註冊到 App：$cmd" }
       - name: Mount the built app (macOS)
         if: runner.os == 'macOS'
         run: |
           hdiutil attach dist/YT-Downloader-*.dmg -mountpoint /Volumes/ytdl -nobrowse
           echo "APP_EXE=/Volumes/ytdl/YT 下載器.app/Contents/MacOS/YT-Downloader" >> "$GITHUB_ENV"
+          # ytdl:// 協定（書籤小工具用）要寫進 Info.plist；授權檔要打包進 App
+          app="/Volumes/ytdl/YT 下載器.app"
+          test "$(plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$app/Contents/Info.plist")" = ytdl
+          for f in LICENSE THIRD_PARTY_NOTICES.md; do
+            find "$app" -name "$f" | grep -q . || { echo "::error::App 裡沒有 $f"; exit 1; }
+          done
       - name: Smoke test the installed app
         shell: bash
         run: |
@@ -157,7 +169,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          # Release 說明 = CHANGELOG.md 裡這一版的更新內容 + 下載安裝說明
-          python3 tools/release_notes.py "${TAG#v}" > notes.md
+          # Release 說明 = 該下載哪個檔（附實際大小）+ CHANGELOG.md 裡這一版的更新內容 + 安裝與放行步驟 + 校驗方式
+          python3 tools/release_notes.py "${TAG#v}" --assets release-assets > notes.md
+          # SHA256SUMS.txt：沒有程式碼簽章，讓使用者自己確認下載的檔案完整、沒被竄改（只列檔名，不含資料夾）
+          (cd release-assets && sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS.txt")
+          mv "$RUNNER_TEMP/SHA256SUMS.txt" release-assets/
+          cat release-assets/SHA256SUMS.txt
           gh release create "$TAG" release-assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "YT 下載器 ${TAG}" --notes-file notes.md --latest

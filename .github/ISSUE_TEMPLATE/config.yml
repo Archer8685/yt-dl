@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 常見問題 / FAQ
+    url: https://github.com/Archer8685/yt-dl/blob/main/USER_GUIDE.md#faq
+    about: 下載失敗、錯誤訊息、安裝被擋下等問題，大多在這裡有解法 / Most errors and install warnings are answered here
+  - name: 安裝被 Windows / macOS 擋下 / Blocked by Windows or macOS
+    url: https://github.com/Archer8685/yt-dl/blob/main/USER_GUIDE.md#install-windows
+    about: SmartScreen、Gatekeeper 的放行步驟 / How to open the app the first time

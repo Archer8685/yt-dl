@@ -1,0 +1,28 @@
+name: 功能建議 / Feature request
+description: 希望 App 多一個功能或改善某個地方 / Suggest an idea or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感謝建議！請注意：本專案不會加入破解 DRM、規避地區限制、繞過平台防護等功能（見 [免責聲明](https://github.com/Archer8685/yt-dl/blob/main/DISCLAIMER.md)）。
+
+        Thanks! Note that features for breaking DRM, bypassing region restrictions or platform protections will not be added (see the [disclaimer](https://github.com/Archer8685/yt-dl/blob/main/DISCLAIMER.md)).
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解決什麼問題？ / What problem would this solve?
+      description: 你現在怎麼做、哪裡不方便 / How you do it today and what is inconvenient
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 希望怎麼做？ / What would you like to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他補充 / Anything else
+      description: 截圖、參考的其他 App 等 / Screenshots, similar apps, etc.
